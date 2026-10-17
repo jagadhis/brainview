@@ -4,7 +4,7 @@ import { Link } from "wouter";
 import { isPropertyKey, parseFrontmatter, setFrontmatterField } from "../../../src/shared/frontmatter.ts";
 import { dirname, joinPath, normalizePath } from "../../../src/shared/paths.ts";
 import type { Frontmatter } from "../../../src/shared/types.ts";
-import { STATUS_KEYS } from "../lib/colors.ts";
+import { isHeaderStatus, STATUS_KEYS } from "../lib/colors.ts";
 import { asDate, formatDate, timeAgo } from "../lib/format.ts";
 import { useNoteMap } from "../lib/queries.ts";
 import { noteHref } from "../lib/routes.ts";
@@ -137,7 +137,7 @@ export function PropertiesCard({ frontmatter, error, path }: { frontmatter: Fron
       </div>
     );
   }
-  const entries = Object.entries(frontmatter ?? {}).filter(([k]) => k !== "title");
+  const entries = Object.entries(frontmatter ?? {}).filter(([k, v]) => k !== "title" && !isHeaderStatus(k, v));
   if (entries.length === 0) return null;
   const shown = open ? entries : entries.slice(0, COLLAPSED_ROWS);
   return (

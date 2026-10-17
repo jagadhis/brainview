@@ -9,7 +9,7 @@ import { PropertiesCard } from "../components/Properties.tsx";
 import { RightRail } from "../components/RightRail.tsx";
 import { Button, Chip, Empty, FolderDot, StatusBadge } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
-import { STATUS_KEYS, topFolder } from "../lib/colors.ts";
+import { isHeaderStatus, topFolder } from "../lib/colors.ts";
 import { formatDate, readingTime, timeAgo } from "../lib/format.ts";
 import { useClientLinkResolver } from "../lib/link-resolver.ts";
 import { useInfo, useNote, useNoteMap } from "../lib/queries.ts";
@@ -48,7 +48,7 @@ function Breadcrumbs({ path }: { path: string }) {
 }
 
 function NoteMeta({ note }: { note: NoteDetail }) {
-  const statuses = Object.entries(note.frontmatter ?? {}).filter(([k, v]) => STATUS_KEYS.has(k.toLowerCase()) && typeof v === "string" && v.length < 40);
+  const statuses = Object.entries(note.frontmatter ?? {}).filter(([k, v]) => isHeaderStatus(k, v));
   return (
     <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px] text-ink-faint">
       {statuses.map(([k, v]) => (

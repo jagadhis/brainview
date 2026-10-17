@@ -37,3 +37,6 @@ export function toneFor(value: string): Tone {
 
 /** Frontmatter keys whose values read as a status and render as colored badges. */
 export const STATUS_KEYS = new Set(["status", "state", "phase", "stage", "proof", "priority", "severity", "readiness"]);
+
+/** A short status value is badged in the note header, so the properties card leaves its row out. */
+export const isHeaderStatus = (key: string, value: unknown): boolean => STATUS_KEYS.has(key.toLowerCase()) && typeof value === "string" && value.length < 40;

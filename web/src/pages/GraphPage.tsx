@@ -1,4 +1,4 @@
-import { Eye, EyeOff, LocateFixed, Maximize2, Network, Search, X } from "lucide-react";
+import { Eye, EyeOff, LocateFixed, Maximize2, Network, PanelLeftClose, PanelLeftOpen, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods, type LinkObject, type NodeObject } from "react-force-graph-2d";
 import { useLocation, useSearch } from "wouter";
@@ -93,6 +93,7 @@ export function GraphPage() {
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [panelOpen, setPanelOpen] = useState(true);
 
   useEffect(() => localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)), [prefs]);
 
@@ -317,7 +318,13 @@ export function GraphPage() {
         )
       )}
 
-      {graphData.nodes.length > 0 && (
+      {graphData.nodes.length > 0 && !panelOpen && (
+        <Button variant="outline" size="sm" className="absolute left-3 top-12 z-10 bg-surface/90 backdrop-blur-md" onClick={() => setPanelOpen(true)} title="Show filters">
+          <PanelLeftOpen size={14} /> Filters
+        </Button>
+      )}
+
+      {graphData.nodes.length > 0 && panelOpen && (
         <aside className="absolute left-3 top-12 z-10 flex max-h-[calc(100%-4rem)] w-[260px] flex-col overflow-hidden rounded-xl border border-line bg-surface/90 text-[13px] shadow-lg shadow-black/5 backdrop-blur-md">
           {localMode && (
             <div className="border-b border-line px-3 py-2.5">
@@ -401,6 +408,9 @@ export function GraphPage() {
             >
               {prefs.hideOrphans ? <EyeOff size={12.5} /> : <Eye size={12.5} />}
               Orphans
+            </button>
+            <button type="button" onClick={() => setPanelOpen(false)} className="rounded-md p-1 hover:bg-sunken hover:text-ink" title="Hide filters">
+              <PanelLeftClose size={13} />
             </button>
           </div>
 

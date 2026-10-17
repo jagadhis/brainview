@@ -355,8 +355,8 @@ function NotesTable({
         <thead>
           <tr>
             {header(TITLE, "Title", "left-0 z-20 min-w-[300px] pl-6")}
+            {header(MODIFIED, "Modified", "z-10")}
             {columns.map((key) => header(key, key))}
-            {header(MODIFIED, "Modified", "z-10 pr-6")}
           </tr>
         </thead>
         <tbody>
@@ -371,6 +371,9 @@ function NotesTable({
                     {folder && <span className="max-w-[160px] shrink-0 truncate font-mono text-[11px] text-ink-faint">{folder}</span>}
                   </Link>
                 </td>
+                <td className="h-[34px] whitespace-nowrap border-b border-line bg-canvas px-3 text-[12px] text-ink-faint group-hover:bg-sunken" title={formatDate(note.mtime)}>
+                  {timeAgo(note.mtime)}
+                </td>
                 {columns.map((key) => (
                   <td key={key} className="h-[34px] max-w-[260px] whitespace-nowrap border-b border-line bg-canvas px-3 group-hover:bg-sunken">
                     <div className="flex min-w-0 items-center">
@@ -378,9 +381,6 @@ function NotesTable({
                     </div>
                   </td>
                 ))}
-                <td className="h-[34px] whitespace-nowrap border-b border-line bg-canvas pl-3 pr-6 text-[12px] text-ink-faint group-hover:bg-sunken" title={formatDate(note.mtime)}>
-                  {timeAgo(note.mtime)}
-                </td>
               </tr>
             );
           })}
