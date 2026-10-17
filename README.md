@@ -3,7 +3,15 @@
 Point brainview at a folder of Markdown or MDX notes (a "second brain", a working-memory folder, a docs tree) and it opens a clean local web app to read it, see how it connects, edit it, and ask it questions.
 
 ```sh
-bunx brainview ~/notes          # or: bun src/cli.ts ~/notes
+bunx brainview ~/notes
+```
+
+brainview runs on [Bun](https://bun.sh) 1.2 or newer; `npx` is not enough. To run it from a clone instead:
+
+```sh
+git clone https://github.com/jagadhis/brainview.git && cd brainview
+bun install && bun run build
+bun src/cli.ts ~/notes
 ```
 
 Nothing is uploaded or hosted. brainview reads the folder, keeps an index in memory, watches for changes, and serves the UI on `127.0.0.1`.
