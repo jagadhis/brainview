@@ -23,7 +23,7 @@
     "obsidian-alternative"
   ],
   "bin": {
-    "brainview": "./src/cli.ts"
+    "brainview": "src/cli.ts"
   },
   "files": [
     "src",
