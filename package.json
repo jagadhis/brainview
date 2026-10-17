@@ -1,0 +1,81 @@
+{
+  "name": "brainview",
+  "version": "0.1.0",
+  "description": "Point it at a folder of Markdown or MDX notes and read, map, edit and ask your brain in a clean local web UI.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "brainview": "./src/cli.ts"
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "bun run dev:server & vite --config web/vite.config.ts",
+    "dev:server": "BRAINVIEW_DEV=1 bun --watch src/cli.ts ${BRAINVIEW_FOLDER:-.} --no-open --port 4710",
+    "build": "vite build --config web/vite.config.ts",
+    "start": "bun src/cli.ts",
+    "test": "bun test src",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "github-slugger": "^2.0.0",
+    "minisearch": "^7.2.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/lang-yaml": "^6.1.3",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/merge": "^6.12.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.14",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@tailwindcss/typography": "^0.5.20",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "^5.104.3",
+    "@types/bun": "^1.4.3",
+    "@types/diff": "^8.0.0",
+    "@types/hast": "^3.0.5",
+    "@types/mdast": "^4.0.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@uiw/react-codemirror": "^4.25.12",
+    "@vitejs/plugin-react": "^6.1.2",
+    "clsx": "^2.1.1",
+    "diff": "^9.0.0",
+    "highlight.js": "^11.12.0",
+    "katex": "^0.19.0",
+    "lucide-react": "^1.59.0",
+    "mdast-util-mdx-jsx": "^3.2.0",
+    "mermaid": "^12.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-force-graph-2d": "^1.29.2",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "rehype-slug": "^6.0.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "remark-mdx": "^3.1.1",
+    "remark-parse": "^11.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.1.0",
+    "vite": "^8.3.4",
+    "wouter": "^3.13.0"
+  }
+}

@@ -1,0 +1,212 @@
+import type { Element } from "hast";
+import { Check, Copy, ExternalLink, Puzzle } from "lucide-react";
+import { memo, useMemo, useState, type ReactNode } from "react";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeSlug from "rehype-slug";
+import remarkFrontmatter from "remark-frontmatter";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import remarkMdx from "remark-mdx";
+import remarkParse from "remark-parse";
+import { unified, type PluggableList } from "unified";
+import type { OutgoingLink } from "../../../src/shared/types.ts";
+import { isExternalHref } from "../../../src/shared/links.ts";
+import { dirname, joinPath, normalizePath } from "../../../src/shared/paths.ts";
+import { assetUrl } from "../lib/api.ts";
+import { remarkMdxPreview, remarkWikiLinks } from "../lib/remark.ts";
+import { Mermaid } from "./Mermaid.tsx";
+import { NoteLink } from "./NoteLink.tsx";
+
+const schema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "video", "mark", "u", "figure", "figcaption"],
+  protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "wiki"] },
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [["className", /^language-./, "math-inline", "math-display"]],
+    div: [...(defaultSchema.attributes?.div ?? []), ["className", "mdx-component"], "dataMdxName", "dataMdxProps"],
+    span: [...(defaultSchema.attributes?.span ?? []), ["className", "mdx-component"], "dataMdxName", "dataMdxProps"],
+    video: ["src", "controls", "width", "height", "poster"],
+  },
+};
+
+const keepWikiLinks = (url: string) => (url.startsWith("wiki:") ? url : defaultUrlTransform(url));
+
+export interface MarkdownProps {
+  source: string;
+  path: string;
+  kind: "md" | "mdx";
+  outgoing?: OutgoingLink[];
+  resolveNote?: (raw: string, kind: "markdown" | "wiki") => OutgoingLink | null;
+}
+
+function mdxProblem(source: string): string | null {
+  try {
+    unified().use(remarkParse).use(remarkFrontmatter).use(remarkMdx).parse(source);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+function textOf(node: Element | undefined): string {
+  if (!node) return "";
+  return node.children.map((c) => (c.type === "text" ? c.value : c.type === "element" ? textOf(c) : "")).join("");
+}
+
+function CodeBlock({ node, children }: { node?: Element; children?: ReactNode }) {
+  const code = node?.children.find((c): c is Element => c.type === "element" && c.tagName === "code");
+  const classes = (code?.properties?.className as string[] | undefined) ?? [];
+  const language = classes.find((c) => c.startsWith("language-"))?.slice("language-".length);
+  const raw = textOf(code).replace(/\n$/, "");
+  const [copied, setCopied] = useState(false);
+
+  if (language === "mermaid") return <Mermaid code={raw} />;
+  return (
+    <div className="group relative not-prose my-5">
+      <div className="absolute right-2 top-2 flex items-center gap-1.5 opacity-0 transition group-hover:opacity-100">
+        {language && <span className="rounded bg-surface/80 px-1.5 py-0.5 font-mono text-[10.5px] text-ink-faint">{language}</span>}
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard.writeText(raw);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+          className="rounded-md border border-line bg-surface p-1 text-ink-faint hover:text-ink"
+          title="Copy"
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      </div>
+      <pre className="overflow-x-auto rounded-lg border border-line bg-sunken px-4 py-3.5 font-mono text-[13px] leading-relaxed text-ink">{children}</pre>
+    </div>
+  );
+}
+
+/** Raw HTML in a note can carry these attributes too, so the value is not always the JSON our remark plugin wrote. */
+function mdxProps(value: unknown): [string, string][] {
+  try {
+    const parsed: unknown = JSON.parse(String(value ?? "[]"));
+    return Array.isArray(parsed)
+      ? parsed.filter((p): p is [string, string] => Array.isArray(p) && typeof p[0] === "string" && typeof p[1] === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function MdxComponent({ node, children }: { node?: Element; children?: ReactNode }) {
+  const name = String(node?.properties?.dataMdxName ?? "Component");
+  const props = mdxProps(node?.properties?.dataMdxProps);
+  const inline = node?.tagName === "span";
+  if (inline) {
+    return (
+      <span className="rounded border border-dashed border-accent/50 bg-accent-soft/60 px-1 font-mono text-[0.85em] text-accent-ink" title={`<${name}> component`}>
+        {children && String(children) !== "" ? children : `<${name} />`}
+      </span>
+    );
+  }
+  return (
+    <div className="not-prose my-5 overflow-hidden rounded-lg border border-dashed border-accent/50">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 bg-accent-soft/60 px-3 py-1.5 font-mono text-[12px] text-accent-ink">
+        <Puzzle size={13} />
+        <span className="font-semibold">{`<${name}>`}</span>
+        {props.map(([key, value]) => (
+          <span key={key + value} className="text-ink-soft">
+            {key}=<span className="text-ink">{value}</span>
+          </span>
+        ))}
+      </div>
+      {children && <div className="note-prose px-4 py-2">{children}</div>}
+    </div>
+  );
+}
+
+function MarkdownView({ source, path, kind, outgoing, resolveNote }: MarkdownProps) {
+  const mdxError = useMemo(() => (kind === "mdx" ? mdxProblem(source) : null), [kind, source]);
+  const useMdx = kind === "mdx" && mdxError === null;
+
+  const byRaw = useMemo(() => {
+    const map = new Map<string, OutgoingLink>();
+    for (const link of outgoing ?? []) map.set(`${link.kind}:${link.raw}`, link);
+    return map;
+  }, [outgoing]);
+
+  const remarkPlugins: PluggableList = useMemo(
+    () => [remarkFrontmatter, remarkGfm, remarkMath, ...(useMdx ? [remarkMdx, remarkMdxPreview] : []), remarkWikiLinks],
+    [useMdx],
+  );
+  const rehypePlugins: PluggableList = useMemo(
+    () => [...(useMdx ? [] : [rehypeRaw]), [rehypeSanitize, schema], rehypeKatex, rehypeSlug, [rehypeHighlight, { plainText: ["mermaid", "text", "txt", "plain"] }]],
+    [useMdx],
+  );
+
+  const components: Components = useMemo(
+    () => ({
+      a({ href = "", children }) {
+        if (href.startsWith("wiki:")) {
+          const [raw, anchor] = href.slice(5).split("#");
+          const link = byRaw.get(`wiki:${raw!.trim()}`) ?? resolveNote?.(raw!.trim(), "wiki") ?? null;
+          return <NoteLink link={link} anchor={anchor} label={children} />;
+        }
+        if (href.startsWith("#")) return <a href={href}>{children}</a>;
+        if (isExternalHref(href)) {
+          return (
+            <a href={href} target="_blank" rel="noreferrer noopener">
+              {children}
+              <ExternalLink size={11} className="ml-0.5 inline -translate-y-px opacity-50" />
+            </a>
+          );
+        }
+        const link = byRaw.get(`markdown:${href}`) ?? resolveNote?.(href, "markdown") ?? null;
+        const anchor = href.includes("#") ? href.slice(href.indexOf("#") + 1) : undefined;
+        return <NoteLink link={link} anchor={anchor} label={children} />;
+      },
+      img({ src = "", alt }) {
+        const url = typeof src === "string" && !isExternalHref(src) && !src.startsWith("data:") ? assetUrl(src.startsWith("/") ? normalizePath(src) : joinPath(dirname(path), decodeURI(src))) : String(src);
+        return <img src={url} alt={alt ?? ""} loading="lazy" />;
+      },
+      pre: CodeBlock,
+      div(props) {
+        if (props.className === "mdx-component") return <MdxComponent node={props.node} children={props.children} />;
+        const { node: _node, ...rest } = props;
+        return <div {...rest} />;
+      },
+      span(props) {
+        if (props.className === "mdx-component") return <MdxComponent node={props.node} children={props.children} />;
+        const { node: _node, ...rest } = props;
+        return <span {...rest} />;
+      },
+      table({ children }) {
+        return (
+          <div className="my-6 overflow-x-auto rounded-lg border border-line">
+            <table className="!my-0 w-full">{children}</table>
+          </div>
+        );
+      },
+    }),
+    [byRaw, path, resolveNote],
+  );
+
+  return (
+    <>
+      {mdxError && (
+        <div className="mb-5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-[13px] text-amber-800 dark:text-amber-300">
+          This MDX file does not parse, so it is shown as plain Markdown. <span className="font-mono">{mdxError}</span>
+        </div>
+      )}
+      <div className="note-prose">
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components} urlTransform={keepWikiLinks}>
+          {source}
+        </ReactMarkdown>
+      </div>
+    </>
+  );
+}
+
+export const Markdown = memo(MarkdownView);

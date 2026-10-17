@@ -1,0 +1,304 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@import "katex/dist/katex.min.css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-canvas: var(--bv-canvas);
+  --color-surface: var(--bv-surface);
+  --color-raised: var(--bv-raised);
+  --color-sunken: var(--bv-sunken);
+  --color-line: var(--bv-line);
+  --color-line-strong: var(--bv-line-strong);
+  --color-ink: var(--bv-ink);
+  --color-ink-soft: var(--bv-ink-soft);
+  --color-ink-faint: var(--bv-ink-faint);
+  --color-accent: var(--bv-accent);
+  --color-accent-soft: var(--bv-accent-soft);
+  --color-accent-ink: var(--bv-accent-ink);
+}
+
+:root {
+  --bv-canvas: #fbfbfa;
+  --bv-surface: #ffffff;
+  --bv-raised: #ffffff;
+  --bv-sunken: #f4f4f2;
+  --bv-line: #e8e8e5;
+  --bv-line-strong: #d6d6d1;
+  --bv-ink: #1c1c1a;
+  --bv-ink-soft: #55554f;
+  --bv-ink-faint: #8f8f88;
+  --bv-accent: #6d5dfc;
+  --bv-accent-soft: #efedff;
+  --bv-accent-ink: #4b3fd1;
+  color-scheme: light;
+}
+
+.dark {
+  --bv-canvas: #111113;
+  --bv-surface: #17171a;
+  --bv-raised: #1e1e22;
+  --bv-sunken: #0c0c0e;
+  --bv-line: #29292e;
+  --bv-line-strong: #3a3a41;
+  --bv-ink: #ececee;
+  --bv-ink-soft: #a9a9b2;
+  --bv-ink-faint: #6e6e78;
+  --bv-accent: #8b7eff;
+  --bv-accent-soft: #24213f;
+  --bv-accent-ink: #b9b1ff;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas text-ink font-sans antialiased;
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+::selection {
+  background: color-mix(in oklab, var(--bv-accent) 28%, transparent);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bv-line-strong) transparent;
+}
+
+/* ---------- Note typography */
+
+.note-prose {
+  @apply prose prose-zinc dark:prose-invert max-w-none;
+  --tw-prose-body: var(--bv-ink);
+  --tw-prose-headings: var(--bv-ink);
+  --tw-prose-links: var(--bv-accent-ink);
+  --tw-prose-bold: var(--bv-ink);
+  --tw-prose-quotes: var(--bv-ink-soft);
+  --tw-prose-quote-borders: var(--bv-accent);
+  --tw-prose-code: var(--bv-ink);
+  --tw-prose-hr: var(--bv-line);
+  --tw-prose-th-borders: var(--bv-line-strong);
+  --tw-prose-td-borders: var(--bv-line);
+  --tw-prose-bullets: var(--bv-ink-faint);
+  --tw-prose-counters: var(--bv-ink-faint);
+  --tw-prose-invert-body: var(--bv-ink);
+  --tw-prose-invert-headings: var(--bv-ink);
+  --tw-prose-invert-links: var(--bv-accent-ink);
+  --tw-prose-invert-bold: var(--bv-ink);
+  --tw-prose-invert-quotes: var(--bv-ink-soft);
+  --tw-prose-invert-quote-borders: var(--bv-accent);
+  --tw-prose-invert-code: var(--bv-ink);
+  --tw-prose-invert-hr: var(--bv-line);
+  --tw-prose-invert-th-borders: var(--bv-line-strong);
+  --tw-prose-invert-td-borders: var(--bv-line);
+  --tw-prose-invert-bullets: var(--bv-ink-faint);
+  --tw-prose-invert-counters: var(--bv-ink-faint);
+  font-size: 15.5px;
+  line-height: 1.72;
+}
+
+.note-prose :where(h1, h2, h3, h4) {
+  @apply tracking-tight scroll-mt-20;
+  font-weight: 650;
+}
+.note-prose :where(h1) {
+  font-size: 1.9em;
+  margin-bottom: 0.6em;
+}
+.note-prose :where(h2) {
+  @apply border-b border-line pb-1.5;
+  font-size: 1.32em;
+  margin-top: 2em;
+}
+.note-prose :where(h3) {
+  font-size: 1.1em;
+}
+.note-prose :where(a) {
+  @apply no-underline decoration-accent/40 underline-offset-[3px] hover:underline;
+  font-weight: 500;
+}
+.note-prose :where(a.link-dead) {
+  @apply text-red-600 dark:text-red-400 decoration-wavy underline;
+}
+.note-prose :where(a.link-outside) {
+  @apply text-ink-soft;
+}
+.note-prose :where(:not(pre) > code) {
+  @apply rounded-[5px] bg-sunken px-[0.35em] py-[0.12em] font-mono text-[0.86em] font-normal border border-line;
+}
+.note-prose :where(:not(pre) > code)::before,
+.note-prose :where(:not(pre) > code)::after {
+  content: none;
+}
+.note-prose :where(pre) {
+  @apply rounded-lg border border-line bg-sunken text-ink font-mono text-[13px] leading-relaxed;
+  padding: 0.95em 1.1em;
+}
+.note-prose :where(table) {
+  @apply text-[14px] block overflow-x-auto;
+}
+.note-prose :where(thead th) {
+  @apply bg-sunken font-semibold text-ink;
+  padding: 0.5em 0.75em !important;
+}
+.note-prose :where(tbody td) {
+  padding: 0.45em 0.75em !important;
+  vertical-align: top;
+}
+.note-prose :where(blockquote) {
+  @apply not-italic font-normal rounded-r-md bg-accent-soft/50 py-0.5;
+}
+.note-prose :where(blockquote p:first-of-type)::before,
+.note-prose :where(blockquote p:last-of-type)::after {
+  content: none;
+}
+.note-prose :where(li > input[type="checkbox"]) {
+  @apply mr-2 accent-accent align-middle;
+}
+.note-prose :where(ul.contains-task-list) {
+  @apply list-none pl-1;
+}
+.note-prose :where(details) {
+  @apply rounded-lg border border-line bg-surface px-4 py-2 my-4;
+}
+.note-prose :where(summary) {
+  @apply cursor-pointer font-medium;
+}
+.note-prose :where(img) {
+  @apply rounded-lg border border-line;
+}
+
+/* ---------- Syntax highlighting (highlight.js classes) */
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--bv-ink-faint);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type {
+  color: #8a3ffc;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: #0f7b52;
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-variable,
+.hljs-template-variable {
+  color: #b35900;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: #1f5fd6;
+}
+.hljs-attr,
+.hljs-property,
+.hljs-params {
+  color: #a4377a;
+}
+.hljs-deletion {
+  color: #c62828;
+}
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-literal,
+.dark .hljs-type {
+  color: #c4a7ff;
+}
+.dark .hljs-string,
+.dark .hljs-regexp,
+.dark .hljs-addition,
+.dark .hljs-attribute {
+  color: #7ee2b3;
+}
+.dark .hljs-number,
+.dark .hljs-symbol,
+.dark .hljs-bullet,
+.dark .hljs-variable {
+  color: #ffbd7a;
+}
+.dark .hljs-title,
+.dark .hljs-section,
+.dark .hljs-name {
+  color: #8ab4ff;
+}
+.dark .hljs-attr,
+.dark .hljs-property,
+.dark .hljs-params {
+  color: #f59ccf;
+}
+
+/* ---------- CodeMirror */
+
+.cm-editor {
+  @apply h-full text-[13.5px];
+  background: transparent !important;
+}
+.cm-editor.cm-focused {
+  outline: none !important;
+}
+.cm-editor .cm-scroller {
+  font-family: var(--font-mono) !important;
+  line-height: 1.65 !important;
+}
+.cm-gutters {
+  background: transparent !important;
+  border-right: 1px solid var(--bv-line) !important;
+  color: var(--bv-ink-faint) !important;
+}
+.cm-activeLine,
+.cm-activeLineGutter {
+  background: color-mix(in oklab, var(--bv-accent) 6%, transparent) !important;
+}
+
+/* ---------- Small utilities */
+
+.kbd {
+  @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-line-strong bg-surface px-1 font-mono text-[10.5px] text-ink-faint;
+}
+
+@keyframes bv-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-in {
+  animation: bv-fade-in 160ms ease-out;
+}
+
+.caret::after {
+  content: "▍";
+  @apply text-accent ml-0.5;
+  animation: bv-blink 1s steps(2, start) infinite;
+}
+@keyframes bv-blink {
+  to {
+    visibility: hidden;
+  }
+}
