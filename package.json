@@ -1,6 +1,6 @@
 {
   "name": "brainview",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Point it at a folder of Markdown or MDX notes and read, map, edit and ask your brain in a clean local web UI.",
   "type": "module",
   "license": "MIT",
