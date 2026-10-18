@@ -55,16 +55,17 @@ function useSize<T extends HTMLElement>() {
 }
 
 function useTheme() {
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  // The canvas cannot use CSS variables, so re-read them whenever the mode, accent or tone changes on the root.
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
-    const root = document.documentElement;
-    const observer = new MutationObserver(() => setDark(root.classList.contains("dark")));
-    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    const observer = new MutationObserver(() => setRevision((r) => r + 1));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style", "data-tone"] });
     return () => observer.disconnect();
   }, []);
   return useMemo(() => {
     const css = getComputedStyle(document.documentElement);
     const v = (name: string) => css.getPropertyValue(name).trim();
+    const dark = document.documentElement.classList.contains("dark");
     return {
       dark,
       ink: v("--bv-ink"),
@@ -73,7 +74,8 @@ function useTheme() {
       link: dark ? "rgba(255,255,255,0.09)" : "rgba(28,28,26,0.11)",
       linkDim: dark ? "rgba(255,255,255,0.03)" : "rgba(28,28,26,0.04)",
     };
-  }, [dark]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revision]);
 }
 
 export function GraphPage() {

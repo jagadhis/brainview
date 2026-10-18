@@ -504,7 +504,7 @@ function ColumnPicker({ fields, columns, isAuto, onChange }: { fields: Field[]; 
                 <span
                   className={clsx(
                     "grid size-3.5 shrink-0 place-items-center rounded border",
-                    selected.has(f.key) ? "border-accent bg-accent text-white" : "border-line-strong",
+                    selected.has(f.key) ? "border-accent bg-accent text-accent-contrast" : "border-line-strong",
                   )}
                 >
                   {selected.has(f.key) && <Check size={10} strokeWidth={3} />}

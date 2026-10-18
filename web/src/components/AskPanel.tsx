@@ -67,7 +67,7 @@ function AnswerView({ answer, onNavigate }: { answer: Answer; onNavigate: () => 
               href={noteHref(source.path)}
               onClick={onNavigate}
               title={`${source.title}\n\n“${(cited.get(index) ?? [])[0]?.trim().slice(0, 240) ?? ""}”`}
-              className="mx-px inline-flex h-[17px] min-w-[17px] -translate-y-px items-center justify-center rounded-md bg-accent-soft px-1 align-middle font-sans text-[10.5px] font-semibold text-accent-ink no-underline hover:bg-accent hover:text-white"
+              className="mx-px inline-flex h-[17px] min-w-[17px] -translate-y-px items-center justify-center rounded-md bg-accent-soft px-1 align-middle font-sans text-[10.5px] font-semibold text-accent-ink no-underline hover:bg-accent hover:text-accent-contrast"
             >
               {children}
             </Link>
@@ -249,7 +249,7 @@ export function AskPanel({ seed, onClose }: { seed: { question: string; nonce: n
         )}
         {answers.map((a, i) => (
           <div key={i} className="space-y-3">
-            <div className="ml-8 rounded-2xl rounded-tr-md bg-accent px-3.5 py-2 text-[13.5px] leading-relaxed text-white">{a.question}</div>
+            <div className="ml-8 rounded-2xl rounded-tr-md bg-accent px-3.5 py-2 text-[13.5px] leading-relaxed text-accent-contrast">{a.question}</div>
             {a.contextPath && (
               <div className="flex items-center gap-1 text-[11px] text-ink-faint">
                 <FileText size={11} /> with {notes.get(a.contextPath)?.title ?? a.contextPath}

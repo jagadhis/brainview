@@ -141,7 +141,7 @@ export function PropertiesCard({ frontmatter, error, path }: { frontmatter: Fron
   if (entries.length === 0) return null;
   const shown = open ? entries : entries.slice(0, COLLAPSED_ROWS);
   return (
-    <div className="mb-8 overflow-hidden rounded-xl border border-line bg-surface">
+    <div className="mb-8 overflow-hidden rounded-xl border border-line bg-surface" style={{ fontFamily: "var(--bv-font-props)" }}>
       <dl className="divide-y divide-line">
         {shown.map(([key, value]) => (
           <div key={key} className="grid grid-cols-[150px_minmax(0,1fr)] gap-3 px-4 py-2 text-[13px]">

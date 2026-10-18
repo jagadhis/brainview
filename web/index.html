@@ -7,9 +7,11 @@
     <title>brainview</title>
     <script>
       try {
-        const t = localStorage.getItem("brainview:theme");
-        const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+        const p = JSON.parse(localStorage.getItem("brainview:preferences") || "{}") || {};
+        const mode = p.mode || localStorage.getItem("brainview:theme") || "system";
+        const dark = mode === "system" ? matchMedia("(prefers-color-scheme: dark)").matches : mode === "dark";
         document.documentElement.classList.toggle("dark", dark);
+        if (typeof p.tone === "string") document.documentElement.dataset.tone = p.tone;
       } catch {}
     </script>
   </head>

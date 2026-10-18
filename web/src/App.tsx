@@ -1,8 +1,9 @@
-import { Moon, PanelLeft, Sparkles, Sun } from "lucide-react";
+import { Moon, PanelLeft, Settings, Sparkles, Sun } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Route, Switch } from "wouter";
 import { AskPanel } from "./components/AskPanel.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
+import { SettingsPanel } from "./components/SettingsPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { Button } from "./components/ui.tsx";
 import { useLiveVault } from "./lib/queries.ts";
@@ -14,7 +15,7 @@ import { OverviewPage } from "./pages/OverviewPage.tsx";
 import { TablePage } from "./pages/TablePage.tsx";
 
 export function App() {
-  const { setPaletteOpen, paletteOpen, askOpen, setAskOpen, dark, toggleDark, sidebarOpen, setSidebarOpen } = useUi();
+  const { setPaletteOpen, paletteOpen, askOpen, setAskOpen, dark, toggleDark, setSettingsOpen, sidebarOpen, setSidebarOpen } = useUi();
   const [askSeed, setAskSeed] = useState<{ question: string; nonce: number } | null>(null);
   useLiveVault();
 
@@ -58,6 +59,9 @@ export function App() {
             <Button variant="ghost" size="sm" className="!px-1.5" onClick={toggleDark} title="Toggle theme">
               {dark ? <Sun size={15} /> : <Moon size={15} />}
             </Button>
+            <Button variant="ghost" size="sm" className="!px-1.5" onClick={() => setSettingsOpen(true)} title="Settings">
+              <Settings size={15} />
+            </Button>
             {!askOpen && !sidebarOpen && (
               <Button variant="outline" size="sm" onClick={() => setAskOpen(true)} title="Ask your brain (⌘J)">
                 <Sparkles size={14} className="text-accent" /> Ask
@@ -80,6 +84,7 @@ export function App() {
       </div>
       {askOpen && <AskPanel seed={askSeed} onClose={() => setAskOpen(false)} />}
       <CommandPalette onAsk={ask} />
+      <SettingsPanel />
     </div>
   );
 }

@@ -46,7 +46,7 @@ export function Button({ variant = "outline", size = "md", className, ...props }
       className={clsx(
         "inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-accent",
         size === "sm" ? "h-7 px-2.5 text-[12.5px]" : "h-8 px-3 text-[13px]",
-        variant === "primary" && "bg-accent text-white shadow-sm shadow-accent/30 hover:brightness-110",
+        variant === "primary" && "bg-accent text-accent-contrast shadow-sm shadow-accent/30 hover:brightness-110",
         variant === "outline" && "border border-line-strong bg-surface text-ink hover:bg-sunken",
         variant === "ghost" && "text-ink-soft hover:bg-sunken hover:text-ink",
         variant === "danger" && "bg-red-600 text-white hover:bg-red-500",

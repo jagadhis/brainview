@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CornerDownLeft, FileText, HeartPulse, LayoutDashboard, Moon, Network, Search, Sparkles, Table2, type LucideIcon } from "lucide-react";
+import { CornerDownLeft, FileText, HeartPulse, LayoutDashboard, Moon, Network, Search, Settings, Sparkles, Table2, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { api } from "../lib/api.ts";
@@ -30,7 +30,7 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 export function CommandPalette({ onAsk }: { onAsk: (question: string) => void }) {
-  const { paletteOpen, setPaletteOpen, toggleDark } = useUi();
+  const { paletteOpen, setPaletteOpen, setSettingsOpen, toggleDark } = useUi();
   const [, navigate] = useLocation();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -62,6 +62,7 @@ export function CommandPalette({ onAsk }: { onAsk: (question: string) => void })
       { id: "c:table", icon: Table2, title: "Open tables and boards", run: () => go("/table") },
       { id: "c:health", icon: HeartPulse, title: "Check brain health", run: () => go("/health") },
       { id: "c:theme", icon: Moon, title: "Toggle dark mode", run: () => (toggleDark(), close()) },
+      { id: "c:settings", icon: Settings, title: "Open settings", run: () => (close(), setSettingsOpen(true)) },
     ];
     const lower = query.trim().toLowerCase();
     if (!lower) {

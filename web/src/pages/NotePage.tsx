@@ -168,8 +168,8 @@ export function NotePage({ routePath, onAsk }: { routePath: string | undefined; 
 
   return (
     <div ref={setScrollRoot} className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-[1160px] gap-12 px-8 pb-28 pt-14">
-        <article className="animate-in min-w-0 max-w-[780px] flex-1">
+      <div className="mx-auto flex max-w-[calc(var(--bv-note-width)+380px)] gap-12 px-8 pb-28 pt-14">
+        <article className="animate-in min-w-0 max-w-[var(--bv-note-width)] flex-1">
           <Breadcrumbs path={note.path} />
           <div className="flex items-start justify-between gap-4">
             <h1 className="mb-3 text-[30px] font-bold leading-[1.18] tracking-tight text-ink">{note.title}</h1>

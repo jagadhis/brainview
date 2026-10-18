@@ -60,7 +60,7 @@ export function Sidebar() {
   return (
     <aside className="flex h-full w-[272px] shrink-0 flex-col border-r border-line bg-surface">
       <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
-        <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-accent to-fuchsia-500 text-white shadow-sm shadow-accent/30">
+        <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-accent to-accent-ink text-accent-contrast shadow-sm shadow-accent/30">
           <BrainCircuit size={17} />
         </div>
         <div className="min-w-0">

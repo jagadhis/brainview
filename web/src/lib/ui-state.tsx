@@ -1,10 +1,15 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { applyPreferences, loadPreferences, savePreferences, type Preferences } from "./preferences.ts";
 
 interface UiState {
   askOpen: boolean;
   setAskOpen: (open: boolean) => void;
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
+  settingsOpen: boolean;
+  setSettingsOpen: (open: boolean) => void;
+  preferences: Preferences;
+  updatePreferences: (changes: Partial<Preferences>) => void;
   dark: boolean;
   toggleDark: () => void;
   sidebarOpen: boolean;
@@ -13,26 +18,39 @@ interface UiState {
 
 const Ctx = createContext<UiState | null>(null);
 
+const systemDarkQuery = () => matchMedia("(prefers-color-scheme: dark)");
+
 export function UiProvider({ children }: { children: ReactNode }) {
   const [askOpen, setAskOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 900);
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  const [preferences, setPreferences] = useState(loadPreferences);
+  const [systemDark, setSystemDark] = useState(() => systemDarkQuery().matches);
+  const dark = preferences.mode === "system" ? systemDark : preferences.mode === "dark";
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-  }, [dark]);
+    const query = systemDarkQuery();
+    const onChange = () => setSystemDark(query.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
 
-  const toggleDark = useCallback(() => {
-    setDark((d) => {
-      localStorage.setItem("brainview:theme", d ? "light" : "dark");
-      return !d;
+  useLayoutEffect(() => applyPreferences(preferences, dark), [preferences, dark]);
+
+  const updatePreferences = useCallback((changes: Partial<Preferences>) => {
+    setPreferences((current) => {
+      const next = { ...current, ...changes };
+      savePreferences(next);
+      return next;
     });
   }, []);
 
+  const toggleDark = useCallback(() => updatePreferences({ mode: dark ? "light" : "dark" }), [dark, updatePreferences]);
+
   const value = useMemo(
-    () => ({ askOpen, setAskOpen, paletteOpen, setPaletteOpen, dark, toggleDark, sidebarOpen, setSidebarOpen }),
-    [askOpen, paletteOpen, dark, toggleDark, sidebarOpen],
+    () => ({ askOpen, setAskOpen, paletteOpen, setPaletteOpen, settingsOpen, setSettingsOpen, preferences, updatePreferences, dark, toggleDark, sidebarOpen, setSidebarOpen }),
+    [askOpen, paletteOpen, settingsOpen, preferences, updatePreferences, dark, toggleDark, sidebarOpen],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
