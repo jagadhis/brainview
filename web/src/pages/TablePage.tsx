@@ -5,7 +5,7 @@ import type { NoteSummary } from "../../../src/shared/types.ts";
 import { Button, clsx, Empty, FolderDot, Spinner, StatusBadge } from "../components/ui.tsx";
 import { STATUS_KEYS, topFolder } from "../lib/colors.ts";
 import { asDate, formatDate, timeAgo } from "../lib/format.ts";
-import { useNotes } from "../lib/queries.ts";
+import { useTable } from "../lib/queries.ts";
 import { noteHref } from "../lib/routes.ts";
 
 type View = "table" | "board";
@@ -143,7 +143,7 @@ function shortDate(date: Date): string {
 }
 
 export function TablePage() {
-  const { data: notes, isLoading } = useNotes();
+  const { data: notes, isLoading } = useTable();
   const [, navigate] = useLocation();
   const params = new URLSearchParams(useSearch());
   const folder = params.get("folder") ?? "";

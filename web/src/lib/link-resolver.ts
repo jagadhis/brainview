@@ -1,10 +1,10 @@
 import { useCallback, useMemo } from "react";
 import { resolveLink, type LinkTargetIndex } from "../../../src/shared/links.ts";
 import { basename, stripExtension } from "../../../src/shared/paths.ts";
-import type { NoteSummary } from "../../../src/shared/types.ts";
+import type { NoteListing } from "../../../src/shared/types.ts";
 
 /** Client-side link resolution for text that has not been saved yet (editor preview). Saved notes use the server's resolution. */
-export function useClientLinkResolver(notes: Map<string, NoteSummary>, fromPath: string) {
+export function useClientLinkResolver(notes: Map<string, NoteListing>, fromPath: string) {
   const index: LinkTargetIndex = useMemo(() => {
     const byBasename = new Map<string, string[]>();
     const byTitle = new Map<string, string>();

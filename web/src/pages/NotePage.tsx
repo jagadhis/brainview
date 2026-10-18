@@ -1,13 +1,12 @@
 import { ChevronRight, Copy, FilePlus2, FileQuestion, Lock, PencilLine, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { basename, isNotePath, stripExtension } from "../../../src/shared/paths.ts";
 import type { NoteDetail } from "../../../src/shared/types.ts";
 import { Markdown } from "../components/Markdown.tsx";
-import { NoteEditor } from "../components/NoteEditor.tsx";
 import { PropertiesCard } from "../components/Properties.tsx";
 import { RightRail } from "../components/RightRail.tsx";
-import { Button, Chip, Empty, FolderDot, StatusBadge } from "../components/ui.tsx";
+import { Button, Chip, Empty, FolderDot, Spinner, StatusBadge } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { isHeaderStatus, topFolder } from "../lib/colors.ts";
 import { formatDate, readingTime, timeAgo } from "../lib/format.ts";
@@ -16,6 +15,8 @@ import { useInfo, useNote, useNoteMap } from "../lib/queries.ts";
 import { rememberVisit } from "../lib/recent.ts";
 import { noteHref, pathFromRoute } from "../lib/routes.ts";
 import { useToast } from "../lib/toast.tsx";
+
+const NoteEditor = lazy(() => import("../components/NoteEditor.tsx").then((m) => ({ default: m.NoteEditor })));
 
 /** Drops the first H1 when it repeats the page title shown above it. */
 function withoutTitleHeading(note: NoteDetail): string {
@@ -164,7 +165,13 @@ export function NotePage({ routePath, onAsk }: { routePath: string | undefined; 
     );
   }
   if (isError || !note) return <NotFound path={path} readOnly={readOnly} />;
-  if (editing) return <NoteEditor note={note} initialLine={line} readOnly={readOnly} onDone={() => navigate(noteHref(note.path))} />;
+  if (editing) {
+    return (
+      <Suspense fallback={<Spinner className="m-10 text-ink-faint" />}>
+        <NoteEditor note={note} initialLine={line} readOnly={readOnly} onDone={() => navigate(noteHref(note.path))} />
+      </Suspense>
+    );
+  }
 
   return (
     <div ref={setScrollRoot} className="h-full overflow-y-auto">

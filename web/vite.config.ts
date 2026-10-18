@@ -6,6 +6,9 @@ import { defineConfig } from "vite";
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: { "@excalidraw/mermaid-to-excalidraw": fileURLToPath(new URL("src/lib/mermaid-to-excalidraw-stub.ts", import.meta.url)) },
+  },
   build: {
     outDir: fileURLToPath(new URL("../dist/web", import.meta.url)),
     emptyOutDir: true,

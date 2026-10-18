@@ -66,7 +66,7 @@ export function extractLinks(source: string): RawLink[] {
   return links;
 }
 
-function decode(href: string): string {
+export function decodeHref(href: string): string {
   try {
     return decodeURIComponent(href);
   } catch {
@@ -83,7 +83,7 @@ export function resolveLink(fromPath: string, link: Pick<RawLink, "raw" | "kind"
 }
 
 function resolveMarkdownLink(fromPath: string, href: string, index: LinkTargetIndex): ResolvedLink {
-  const clean = decode(href.replace(/[#?].*$/, ""));
+  const clean = decodeHref(href.replace(/[#?].*$/, ""));
   if (clean === "") return { status: "note", target: fromPath };
   const path = clean.startsWith("/") ? normalizePath(clean) : joinPath(dirname(fromPath), clean);
 

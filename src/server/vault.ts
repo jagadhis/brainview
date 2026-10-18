@@ -14,6 +14,7 @@ import type {
   HealthReport,
   Mount,
   NoteDetail,
+  NoteListing,
   NoteSummary,
   OutgoingLink,
   Overview,
@@ -43,6 +44,7 @@ export class SaveConflict extends Error {
 
 const IGNORED_DIRS = new Set(["node_modules", "dist", "build", "target", "out"]);
 const SEARCH_FIELDS = ["title", "path", "headings", "meta", "body"] as const;
+const INDEX_SLICE = 100;
 
 export function contentHash(content: string): string {
   return createHash("sha1").update(content).digest("hex");
@@ -106,6 +108,8 @@ export class Vault {
   private artifacts = new Map<string, ArtifactSummary>();
   private backlinks = new Map<string, Backlink[]>();
   private search = this.createSearch();
+  private scanning = false;
+  private indexed: Promise<void> = Promise.resolve();
   private watcher: FSWatcher | null = null;
   private pending = new Set<string>();
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -169,8 +173,24 @@ export class Vault {
       );
     };
     await walk(this.root);
+    this.scanning = true;
     await Promise.all(files.map((full) => this.load(this.toVaultPath(full))));
+    this.scanning = false;
     this.relink();
+    this.indexed = this.indexAll();
+  }
+
+  /** Builds the search index in slices after the scan, so the server answers requests while it builds. */
+  private async indexAll(): Promise<void> {
+    const paths = [...this.notes.keys()];
+    for (let i = 0; i < paths.length; i += INDEX_SLICE) {
+      for (const path of paths.slice(i, i + INDEX_SLICE)) {
+        const note = this.notes.get(path);
+        // A note the watcher loaded meanwhile is already indexed with its newer content.
+        if (note && !this.search.has(path)) this.index(note);
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
   }
 
   private async load(path: string): Promise<boolean> {
@@ -192,7 +212,7 @@ export class Vault {
         outgoing: [],
       };
       this.notes.set(path, record);
-      this.index(record);
+      if (!this.scanning) this.index(record);
       return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return this.unload(path);
@@ -316,6 +336,10 @@ export class Vault {
     return [...this.notes.values()].map((n) => this.summary(n)).sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  listing(): NoteListing[] {
+    return this.list().map(({ frontmatter: _, ...note }) => note);
+  }
+
   get(path: string): NoteDetail | null {
     const note = this.notes.get(path);
     if (!note) return null;
@@ -335,9 +359,10 @@ export class Vault {
     return note ? { title: note.title, content: note.content } : null;
   }
 
-  searchNotes(query: string, limit = 20, combineWith: "AND" | "OR" = "AND"): SearchHit[] {
+  async searchNotes(query: string, limit = 20, combineWith: "AND" | "OR" = "AND"): Promise<SearchHit[]> {
     const q = query.trim();
     if (!q) return [];
+    await this.indexed;
     let results = this.search.search(q, { combineWith });
     if (results.length === 0 && combineWith === "AND") results = this.search.search(q, { combineWith: "OR" });
     return results.slice(0, limit).map((r) => {

@@ -17,6 +17,9 @@ export interface NoteSummary {
   outbound: number;
 }
 
+/** A note in the brain-wide list. Frontmatter is left out because only the table needs it, and it is most of the size. */
+export type NoteListing = Omit<NoteSummary, "frontmatter">;
+
 export interface Heading {
   depth: number;
   text: string;

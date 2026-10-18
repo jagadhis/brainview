@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
-import type { NoteSummary, VaultEvent } from "../../../src/shared/types.ts";
+import type { NoteListing, VaultEvent } from "../../../src/shared/types.ts";
 import { api } from "./api.ts";
 
 export const keys = {
   info: ["info"] as const,
   notes: ["notes"] as const,
+  table: ["table"] as const,
   artifacts: ["artifacts"] as const,
   note: (path: string) => ["note", path] as const,
   graph: ["graph"] as const,
@@ -15,6 +16,7 @@ export const keys = {
 
 export const useInfo = () => useQuery({ queryKey: keys.info, queryFn: api.info, staleTime: 30_000 });
 export const useNotes = () => useQuery({ queryKey: keys.notes, queryFn: api.notes, staleTime: Infinity });
+export const useTable = () => useQuery({ queryKey: keys.table, queryFn: api.table, staleTime: Infinity });
 export const useArtifacts = () => useQuery({ queryKey: keys.artifacts, queryFn: api.artifacts, staleTime: Infinity });
 export const useNote = (path: string | null) =>
   useQuery({ queryKey: keys.note(path ?? ""), queryFn: () => api.note(path!), enabled: Boolean(path), staleTime: Infinity, retry: false });
@@ -22,7 +24,7 @@ export const useGraph = () => useQuery({ queryKey: keys.graph, queryFn: api.grap
 export const useHealth = () => useQuery({ queryKey: keys.health, queryFn: api.health, staleTime: Infinity });
 export const useOverview = () => useQuery({ queryKey: keys.overview, queryFn: api.overview, staleTime: Infinity });
 
-export function useNoteMap(): Map<string, NoteSummary> {
+export function useNoteMap(): Map<string, NoteListing> {
   const { data } = useNotes();
   return useMemo(() => new Map((data ?? []).map((n) => [n.path, n])), [data]);
 }
@@ -36,7 +38,7 @@ export function useLiveVault(onChanged?: (paths: string[]) => void): void {
       const event = JSON.parse(message.data) as VaultEvent;
       if (event.type !== "changed") return;
       for (const path of event.paths) client.invalidateQueries({ queryKey: keys.note(path) });
-      for (const key of [keys.notes, keys.artifacts, keys.graph, keys.health, keys.overview, keys.info]) client.invalidateQueries({ queryKey: key });
+      for (const key of [keys.notes, keys.table, keys.artifacts, keys.graph, keys.health, keys.overview, keys.info]) client.invalidateQueries({ queryKey: key });
       onChanged?.(event.paths);
     };
     return () => source.close();

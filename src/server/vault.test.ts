@@ -37,8 +37,16 @@ describe("Vault index", () => {
     expect(vault.overview().totals.links).toBe(3);
   });
 
-  test("finds notes by content", () => {
-    expect(vault.searchNotes("nobody links")[0]?.path).toBe("items/beta.md");
+  test("finds notes by content", async () => {
+    expect((await vault.searchNotes("nobody links"))[0]?.path).toBe("items/beta.md");
+  });
+
+  test("a search made right after opening waits for the whole index, which builds in slices", async () => {
+    await mkdir(join(dir, "big"));
+    for (let i = 0; i < 250; i++) await writeFile(join(dir, "big", `note-${i}.md`), `# Note ${i}\n\nplain filler words\n`);
+    const big = await Vault.open(join(dir, "big"));
+    expect(await big.searchNotes("filler", 300)).toHaveLength(250);
+    big.close();
   });
 });
 

@@ -209,7 +209,8 @@ export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
       const info: VaultInfo = { name: vault.name, root: vault.root, noteCount: vault.size, readOnly, ai: ai.status(), mounts: vault.mounts };
       return json(info);
     }
-    if (pathname === "/api/notes" && method === "GET") return json(vault.list());
+    if (pathname === "/api/notes" && method === "GET") return json(vault.listing());
+    if (pathname === "/api/table" && method === "GET") return json(vault.list());
     if (pathname === "/api/artifacts" && method === "GET") return json(vault.listArtifacts());
     if (pathname === "/api/note" && method === "GET") {
       const note = vault.get(requiredParam(url, "path"));
@@ -222,7 +223,7 @@ export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
       return json(await vault.save(path, content, method === "POST" ? null : (baseHash ?? null)));
     }
     if (pathname === "/api/search" && method === "GET") {
-      return json(vault.searchNotes(url.searchParams.get("q") ?? "", Number(url.searchParams.get("limit") ?? 20)));
+      return json(await vault.searchNotes(url.searchParams.get("q") ?? "", Number(url.searchParams.get("limit") ?? 20)));
     }
     if (pathname === "/api/graph" && method === "GET") return json(vault.graph());
     if (pathname === "/api/health" && method === "GET") return json(vault.health());

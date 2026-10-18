@@ -7,6 +7,7 @@ import type {
   GraphData,
   HealthReport,
   NoteDetail,
+  NoteListing,
   NoteSummary,
   Overview,
   SearchHit,
@@ -39,7 +40,8 @@ const post = (body: unknown, method = "POST"): RequestInit => ({
 
 export const api = {
   info: () => request<VaultInfo>("/api/info"),
-  notes: () => request<NoteSummary[]>("/api/notes"),
+  notes: () => request<NoteListing[]>("/api/notes"),
+  table: () => request<NoteSummary[]>("/api/table"),
   artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
   note: (path: string) => request<NoteDetail>(`/api/note?path=${encodeURIComponent(path)}`),
   search: (q: string, limit = 20) => request<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),

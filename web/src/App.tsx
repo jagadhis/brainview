@@ -1,19 +1,20 @@
 import { Moon, PanelLeft, Settings, Sparkles, Sun } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Route, Switch } from "wouter";
 import { AskPanel } from "./components/AskPanel.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { SettingsPanel } from "./components/SettingsPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
-import { Button } from "./components/ui.tsx";
+import { Button, Spinner } from "./components/ui.tsx";
 import { useLiveVault } from "./lib/queries.ts";
 import { useUi } from "./lib/ui-state.tsx";
 import { ArtifactPage } from "./pages/ArtifactPage.tsx";
-import { GraphPage } from "./pages/GraphPage.tsx";
-import { HealthPage } from "./pages/HealthPage.tsx";
 import { NotePage } from "./pages/NotePage.tsx";
 import { OverviewPage } from "./pages/OverviewPage.tsx";
-import { TablePage } from "./pages/TablePage.tsx";
+
+const GraphPage = lazy(() => import("./pages/GraphPage.tsx").then((m) => ({ default: m.GraphPage })));
+const TablePage = lazy(() => import("./pages/TablePage.tsx").then((m) => ({ default: m.TablePage })));
+const HealthPage = lazy(() => import("./pages/HealthPage.tsx").then((m) => ({ default: m.HealthPage })));
 
 export function App() {
   const { setPaletteOpen, paletteOpen, askOpen, setAskOpen, dark, toggleDark, setSettingsOpen, sidebarOpen, setSidebarOpen } = useUi();
@@ -71,17 +72,19 @@ export function App() {
           </div>
         </div>
         <main className="min-h-0 flex-1 overflow-hidden">
-          <Switch>
-            <Route path="/" component={OverviewPage} />
-            <Route path="/graph" component={GraphPage} />
-            <Route path="/table" component={TablePage} />
-            <Route path="/health" component={HealthPage} />
-            <Route path="/artifact/*">{(params) => <ArtifactPage routePath={params["*"]} />}</Route>
-            <Route path="/note/*">{(params) => <NotePage routePath={params["*"]} onAsk={ask} />}</Route>
-            <Route>
-              <div className="p-10 text-ink-soft">Page not found.</div>
-            </Route>
-          </Switch>
+          <Suspense fallback={<Spinner className="m-10 text-ink-faint" />}>
+            <Switch>
+              <Route path="/" component={OverviewPage} />
+              <Route path="/graph" component={GraphPage} />
+              <Route path="/table" component={TablePage} />
+              <Route path="/health" component={HealthPage} />
+              <Route path="/artifact/*">{(params) => <ArtifactPage routePath={params["*"]} />}</Route>
+              <Route path="/note/*">{(params) => <NotePage routePath={params["*"]} onAsk={ask} />}</Route>
+              <Route>
+                <div className="p-10 text-ink-soft">Page not found.</div>
+              </Route>
+            </Switch>
+          </Suspense>
         </main>
       </div>
       {askOpen && <AskPanel seed={askSeed} onClose={() => setAskOpen(false)} />}

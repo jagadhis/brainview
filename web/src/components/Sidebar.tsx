@@ -2,7 +2,7 @@ import { BrainCircuit, ChevronRight, FileText, Folder, FolderOpen, HeartPulse, L
 import { memo, useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { basename } from "../../../src/shared/paths.ts";
-import type { ArtifactSummary, NoteSummary } from "../../../src/shared/types.ts";
+import type { ArtifactSummary, NoteListing } from "../../../src/shared/types.ts";
 import { useArtifacts, useInfo, useNotes } from "../lib/queries.ts";
 import { artifactHref, noteHref, pathFromRoute } from "../lib/routes.ts";
 import { buildTree, type TreeFolder } from "../lib/tree.ts";
@@ -205,7 +205,7 @@ function ArtifactRow({ artifact, depth, active }: { artifact: ArtifactSummary; d
   );
 }
 
-function NoteRow({ note, depth, active, showFolder }: { note: NoteSummary; depth: number; active: boolean; showFolder?: boolean }) {
+function NoteRow({ note, depth, active, showFolder }: { note: NoteListing; depth: number; active: boolean; showFolder?: boolean }) {
   return (
     <Link
       href={noteHref(note.path)}

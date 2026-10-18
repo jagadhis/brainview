@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2, ChevronRight, Copy, FileWarning, FileX2, type LucideIcon, Unlink, Waypoints } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "wouter";
-import type { HealthReport, NoteSummary } from "../../../src/shared/types.ts";
+import type { HealthReport, NoteListing } from "../../../src/shared/types.ts";
 import { Button, clsx, Empty, FolderDot, PageHeader, Spinner } from "../components/ui.tsx";
 import { topFolder } from "../lib/colors.ts";
 import { useHealth, useNoteMap } from "../lib/queries.ts";
@@ -206,7 +206,7 @@ function Section({
   );
 }
 
-function NoteLabel({ path, note }: { path: string; note: NoteSummary | undefined }) {
+function NoteLabel({ path, note }: { path: string; note: NoteListing | undefined }) {
   return (
     <div className="flex min-w-0 items-baseline gap-2">
       <FolderDot folder={topFolder(path)} className="relative -top-px" />
@@ -218,7 +218,7 @@ function NoteLabel({ path, note }: { path: string; note: NoteSummary | undefined
   );
 }
 
-function NoteRef({ path, note }: { path: string; note: NoteSummary | undefined }) {
+function NoteRef({ path, note }: { path: string; note: NoteListing | undefined }) {
   return (
     <Link href={noteHref(path)} className="group block">
       <NoteLabel path={path} note={note} />
@@ -235,7 +235,7 @@ function PathLink({ path }: { path: string }) {
   );
 }
 
-function PagedPaths({ paths, notes }: { paths: string[]; notes: Map<string, NoteSummary> }) {
+function PagedPaths({ paths, notes }: { paths: string[]; notes: Map<string, NoteListing> }) {
   const [limit, setLimit] = useState(PAGE);
   return (
     <>

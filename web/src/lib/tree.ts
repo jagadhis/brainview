@@ -1,16 +1,16 @@
 import { dirname } from "../../../src/shared/paths.ts";
-import type { ArtifactSummary, NoteSummary } from "../../../src/shared/types.ts";
+import type { ArtifactSummary, NoteListing } from "../../../src/shared/types.ts";
 
 export interface TreeFolder {
   name: string;
   path: string;
   folders: TreeFolder[];
-  notes: NoteSummary[];
+  notes: NoteListing[];
   artifacts: ArtifactSummary[];
   count: number;
 }
 
-export function buildTree(notes: NoteSummary[], artifacts: ArtifactSummary[] = []): TreeFolder {
+export function buildTree(notes: NoteListing[], artifacts: ArtifactSummary[] = []): TreeFolder {
   const root: TreeFolder = { name: "", path: "", folders: [], notes: [], artifacts: [], count: 0 };
   const index = new Map<string, TreeFolder>([["", root]]);
   const folderFor = (path: string): TreeFolder => {
@@ -47,6 +47,6 @@ export function buildTree(notes: NoteSummary[], artifacts: ArtifactSummary[] = [
   return root;
 }
 
-function indexFirst(note: NoteSummary): number {
+function indexFirst(note: NoteListing): number {
   return /\/(readme|index|current)\.mdx?$|^(readme|index)\.mdx?$/i.test(note.path) ? 0 : 1;
 }

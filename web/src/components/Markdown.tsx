@@ -1,23 +1,21 @@
 import type { Element } from "hast";
 import { Check, Copy, ExternalLink, Puzzle } from "lucide-react";
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, Suspense, use, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
-import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import rehypeSlug from "rehype-slug";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import remarkMdx from "remark-mdx";
 import remarkParse from "remark-parse";
 import { unified, type PluggableList } from "unified";
 import { visit } from "unist-util-visit";
 import type { Root } from "hast";
 import { artifactKind } from "../../../src/shared/artifacts.ts";
 import type { OutgoingLink, VaultInfo } from "../../../src/shared/types.ts";
-import { isExternalHref } from "../../../src/shared/links.ts";
+import { decodeHref, isExternalHref } from "../../../src/shared/links.ts";
 import { dirname, isOutsideVault, joinPath, normalizePath } from "../../../src/shared/paths.ts";
 import { useInfo } from "../lib/queries.ts";
 import { remarkMdxPreview, remarkWikiLinks } from "../lib/remark.ts";
@@ -26,6 +24,7 @@ import { ArtifactEmbed } from "./ArtifactView.tsx";
 import { Graphviz } from "./Diagrams.tsx";
 import { Mermaid } from "./Mermaid.tsx";
 import { NoteLink } from "./NoteLink.tsx";
+import { Spinner } from "./ui.tsx";
 
 const schema = {
   ...defaultSchema,
@@ -78,7 +77,13 @@ export interface MarkdownProps {
   resolveNote?: (raw: string, kind: "markdown" | "wiki") => OutgoingLink | null;
 }
 
-function mdxProblem(source: string): string | null {
+// KaTeX and the MDX parser are large, so they load only for a note that needs them.
+let katexPromise: Promise<typeof import("rehype-katex").default> | null = null;
+let mdxPromise: Promise<typeof import("remark-mdx").default> | null = null;
+const loadKatex = () => (katexPromise ??= import("rehype-katex").then((m) => m.default));
+const loadMdx = () => (mdxPromise ??= import("remark-mdx").then((m) => m.default));
+
+function mdxProblem(source: string, remarkMdx: typeof import("remark-mdx").default): string | null {
   try {
     unified().use(remarkParse).use(remarkFrontmatter).use(remarkMdx).parse(source);
     return null;
@@ -163,8 +168,10 @@ function MdxComponent({ node, children }: { node?: Element; children?: ReactNode
 }
 
 function MarkdownView({ source, path, kind, outgoing, resolveNote }: MarkdownProps) {
-  const mdxError = useMemo(() => (kind === "mdx" ? mdxProblem(source) : null), [kind, source]);
-  const useMdx = kind === "mdx" && mdxError === null;
+  const remarkMdx = kind === "mdx" ? use(loadMdx()) : null;
+  const rehypeKatex = source.includes("$") ? use(loadKatex()) : null;
+  const mdxError = useMemo(() => (remarkMdx ? mdxProblem(source, remarkMdx) : null), [remarkMdx, source]);
+  const useMdx = remarkMdx !== null && mdxError === null;
 
   const byRaw = useMemo(() => {
     const map = new Map<string, OutgoingLink>();
@@ -174,11 +181,11 @@ function MarkdownView({ source, path, kind, outgoing, resolveNote }: MarkdownPro
 
   const remarkPlugins: PluggableList = useMemo(
     () => [remarkFrontmatter, remarkGfm, remarkMath, ...(useMdx ? [remarkMdx, remarkMdxPreview] : []), remarkWikiLinks],
-    [useMdx],
+    [useMdx, remarkMdx],
   );
   const rehypePlugins: PluggableList = useMemo(
-    () => [...(useMdx ? [] : [rehypeRaw]), [rehypeSanitize, schema], rehypeStandaloneLinks, rehypeKatex, rehypeSlug, [rehypeHighlight, { plainText: ["mermaid", "dot", "graphviz", "text", "txt", "plain"] }]],
-    [useMdx],
+    () => [...(useMdx ? [] : [rehypeRaw]), [rehypeSanitize, schema], rehypeStandaloneLinks, ...(rehypeKatex ? [rehypeKatex] : []), rehypeSlug, [rehypeHighlight, { plainText: ["mermaid", "dot", "graphviz", "text", "txt", "plain"] }]],
+    [useMdx, rehypeKatex],
   );
 
   const { data: info } = useInfo();
@@ -187,7 +194,8 @@ function MarkdownView({ source, path, kind, outgoing, resolveNote }: MarkdownPro
     () => ({
       a({ href = "", children, node }) {
         if (href.startsWith("wiki:")) {
-          const [raw, anchor] = href.slice(5).split("#");
+          // The Markdown-to-HTML step percent-encodes link URLs, so `[[Math note]]` arrives as `wiki:Math%20note`.
+          const [raw, anchor] = decodeHref(href.slice(5)).split("#");
           const link = byRaw.get(`wiki:${raw!.trim()}`) ?? resolveNote?.(raw!.trim(), "wiki") ?? null;
           return <NoteLink link={link} anchor={anchor} label={children} />;
         }
@@ -259,4 +267,10 @@ function MarkdownView({ source, path, kind, outgoing, resolveNote }: MarkdownPro
   );
 }
 
-export const Markdown = memo(MarkdownView);
+export const Markdown = memo(function Markdown(props: MarkdownProps) {
+  return (
+    <Suspense fallback={<Spinner className="text-ink-faint" />}>
+      <MarkdownView {...props} />
+    </Suspense>
+  );
+});

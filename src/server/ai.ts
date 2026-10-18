@@ -76,14 +76,14 @@ export class Ai {
     return this.client;
   }
 
-  private retrieve(question: string, contextPath: string | null): AskSource[] {
+  private async retrieve(question: string, contextPath: string | null): Promise<AskSource[]> {
     const paths = new Set<string>();
     if (contextPath && this.vault.content(contextPath)) paths.add(contextPath);
     // Search ranks by relevance, not time, so questions about recent activity also get the newest notes.
     if (RECENCY.test(question)) {
       for (const note of this.vault.list().sort((a, b) => b.mtime - a.mtime).slice(0, 4)) paths.add(note.path);
     }
-    for (const hit of this.vault.searchNotes(question, MAX_SOURCES * 2, "OR")) {
+    for (const hit of await this.vault.searchNotes(question, MAX_SOURCES * 2, "OR")) {
       if (paths.size >= MAX_SOURCES) break;
       paths.add(hit.path);
     }
@@ -95,7 +95,7 @@ export class Ai {
 
   async *ask(req: AskRequest, signal: AbortSignal): AsyncGenerator<AskEvent> {
     const client = this.anthropic();
-    const sources = this.retrieve(req.question, req.contextPath);
+    const sources = await this.retrieve(req.question, req.contextPath);
     yield { type: "sources", sources };
 
     const documents: Anthropic.Beta.BetaRequestDocumentBlock[] = sources.map((s) => {
@@ -178,8 +178,7 @@ export class Ai {
     if (!note) throw new Error("Note not found");
     const linked = new Set(note.outgoing.map((l) => l.target));
     const query = [note.title, ...note.headings.slice(0, 12).map((h) => h.text), ...note.tags].join(" ");
-    const candidates = this.vault
-      .searchNotes(query, 40, "OR")
+    const candidates = (await this.vault.searchNotes(query, 40, "OR"))
       .filter((hit) => hit.path !== path && !linked.has(hit.path))
       .slice(0, 20);
 
