@@ -8,6 +8,7 @@ import { Sidebar } from "./components/Sidebar.tsx";
 import { Button } from "./components/ui.tsx";
 import { useLiveVault } from "./lib/queries.ts";
 import { useUi } from "./lib/ui-state.tsx";
+import { ArtifactPage } from "./pages/ArtifactPage.tsx";
 import { GraphPage } from "./pages/GraphPage.tsx";
 import { HealthPage } from "./pages/HealthPage.tsx";
 import { NotePage } from "./pages/NotePage.tsx";
@@ -75,6 +76,7 @@ export function App() {
             <Route path="/graph" component={GraphPage} />
             <Route path="/table" component={TablePage} />
             <Route path="/health" component={HealthPage} />
+            <Route path="/artifact/*">{(params) => <ArtifactPage routePath={params["*"]} />}</Route>
             <Route path="/note/*">{(params) => <NotePage routePath={params["*"]} onAsk={ask} />}</Route>
             <Route>
               <div className="p-10 text-ink-soft">Page not found.</div>

@@ -1,6 +1,8 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { artifactKind } from "../shared/artifacts.ts";
 import type { AskEvent, AskRequest, AssistRequest, SaveRequest, VaultEvent, VaultInfo } from "../shared/types.ts";
 import { Ai, describeAiError } from "./ai.ts";
 import { SaveConflict, Vault, VaultPathError } from "./vault.ts";
@@ -85,6 +87,46 @@ function ndjson(events: AsyncGenerator<AskEvent>): Response {
   return new Response(stream, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-store" } });
 }
 
+// Browsers resolve dot segments before sending, so an encoded "." or ".." or "/" here only climbs out of the folder an artifact's token covers.
+function decodePath(path: string): string {
+  let parts: string[];
+  try {
+    parts = path.split("/").map(decodeURIComponent);
+  } catch {
+    throw new HttpError(400, "Invalid path");
+  }
+  if (parts.some((part) => part === "." || part === ".." || part.includes("/"))) throw new HttpError(400, "Invalid path");
+  return parts.join("/");
+}
+
+/**
+ * Another website must not pull brain files into its own page, for example as a <script> whose data it can then read.
+ * A top-level navigation is allowed because it renders on this origin, out of the other site's reach.
+ */
+function refuseCrossSiteFileLoad(req: Request): void {
+  const site = req.headers.get("sec-fetch-site");
+  if (site !== "cross-site" && site !== "same-site") return;
+  if (req.headers.get("sec-fetch-mode") === "navigate" && req.headers.get("sec-fetch-dest") === "document") return;
+  throw new HttpError(403, "Cross-site file request refused");
+}
+
+// HTML artifacts may run script, but in an opaque origin: they cannot read this origin's API or storage, and may load only files from this server.
+const HTML_POLICY = [
+  "sandbox allow-scripts allow-popups allow-modals",
+  "default-src 'self' data: blob:",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:",
+  "style-src 'self' 'unsafe-inline' data:",
+  "frame-ancestors 'self'",
+].join("; ");
+
+function fileHeaders(path: string): Record<string, string> {
+  const kind = artifactKind(path);
+  // Chrome's PDF viewer refuses a sandboxed document; a PDF cannot run script on this origin anyway.
+  const policy = kind === "html" ? HTML_POLICY : kind === "pdf" ? "frame-ancestors 'self'" : "sandbox; frame-ancestors 'self'";
+  // no-referrer keeps a tokened artifact URL from leaking to any site the artifact links to.
+  return { "content-security-policy": policy, "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "cache-control": "no-cache" };
+}
+
 // Another site must not frame the app and trick a click onto a save or AI button.
 const NO_FRAMING = { "content-security-policy": "frame-ancestors 'none'", "x-frame-options": "DENY" };
 
@@ -117,6 +159,17 @@ export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
     }
   };
   vault.onChange((paths) => broadcast({ type: "changed", paths }));
+  // A sandboxed HTML artifact has an opaque origin, so its own script and style loads are cross-site and carry no Referer.
+  // It is redirected under /t/<token>, which its relative references inherit. The token covers only the artifact's folder
+  // and the folders below it, so an artifact that leaks its own URL exposes no more than that.
+  const fileSecret = randomBytes(32);
+  const folderToken = (folder: string) => createHmac("sha256", fileSecret).update(folder).digest("base64url").slice(0, 24);
+  const tokenCovers = (token: string, filePathname: string) => {
+    for (let slash = filePathname.lastIndexOf("/"); slash > 0; slash = filePathname.lastIndexOf("/", slash - 1)) {
+      if (folderToken(filePathname.slice(0, slash)) === token) return true;
+    }
+    return false;
+  };
   setInterval(() => {
     for (const client of clients) {
       try {
@@ -127,15 +180,37 @@ export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
     }
   }, 15_000);
 
+  async function resolveFile(pathname: string): Promise<string | null> {
+    if (pathname.startsWith("/files/")) return vault.filePath(decodePath(pathname.slice("/files/".length)));
+    const rest = pathname.slice("/mounts/".length);
+    const slash = rest.indexOf("/");
+    if (slash < 1) return null;
+    return vault.mountFilePath(decodePath(rest.slice(0, slash)), decodePath(rest.slice(slash + 1)));
+  }
+
   async function route(req: Request, url: URL): Promise<Response> {
     const { pathname } = url;
     const method = req.method;
 
+    const [, token, tokenedPath] = /^\/t\/([\w-]{24})(\/.*)$/.exec(pathname) ?? [];
+    const filePathname = tokenedPath ?? pathname;
+    if ((filePathname.startsWith("/files/") || filePathname.startsWith("/mounts/")) && (method === "GET" || method === "HEAD")) {
+      if (token && !tokenCovers(token, filePathname)) return new Response("Not found", { status: 404 });
+      if (!token) refuseCrossSiteFileLoad(req);
+      const full = await resolveFile(filePathname);
+      if (!full) return new Response("Not found", { status: 404 });
+      if (!token && artifactKind(full) === "html") {
+        const location = `/t/${folderToken(pathname.slice(0, pathname.lastIndexOf("/")))}${pathname}`;
+        return new Response(null, { status: 307, headers: { location, "cache-control": "no-store" } });
+      }
+      return new Response(Bun.file(full), { headers: fileHeaders(full) });
+    }
     if (pathname === "/api/info" && method === "GET") {
-      const info: VaultInfo = { name: vault.name, root: vault.root, noteCount: vault.size, readOnly, ai: ai.status() };
+      const info: VaultInfo = { name: vault.name, root: vault.root, noteCount: vault.size, readOnly, ai: ai.status(), mounts: vault.mounts };
       return json(info);
     }
     if (pathname === "/api/notes" && method === "GET") return json(vault.list());
+    if (pathname === "/api/artifacts" && method === "GET") return json(vault.listArtifacts());
     if (pathname === "/api/note" && method === "GET") {
       const note = vault.get(requiredParam(url, "path"));
       return note ? json(note) : json({ error: "Note not found" }, 404);
@@ -152,12 +227,6 @@ export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
     if (pathname === "/api/graph" && method === "GET") return json(vault.graph());
     if (pathname === "/api/health" && method === "GET") return json(vault.health());
     if (pathname === "/api/overview" && method === "GET") return json(vault.overview());
-    if (pathname === "/api/asset" && method === "GET") {
-      const asset = await vault.readAsset(requiredParam(url, "path"));
-      if (!asset) return new Response("Not found", { status: 404 });
-      // Sandboxed so an SVG or HTML file in the brain cannot run script on this origin.
-      return new Response(Bun.file(asset.full), { headers: { "content-security-policy": "sandbox", "x-content-type-options": "nosniff" } });
-    }
     if (pathname === "/api/events" && method === "GET") {
       let self: ReadableStreamDefaultController<Uint8Array>;
       const stream = new ReadableStream<Uint8Array>({

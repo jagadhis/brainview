@@ -12,6 +12,7 @@ Usage
 Options
   -p, --port <n>      Port on 127.0.0.1 (default 4700, or the next free one)
       --model <id>    Claude model for AI features (default ${DEFAULT_MODEL}, or BRAINVIEW_MODEL)
+      --allow <dir>   Also show files from this folder when notes link to them, read-only (repeatable)
       --read-only     Disable saving
       --no-open       Do not open the browser
   -h, --help          Show this help
@@ -23,6 +24,7 @@ const { values, positionals } = parseArgs({
   options: {
     port: { type: "string", short: "p" },
     model: { type: "string" },
+    allow: { type: "string", multiple: true },
     "read-only": { type: "boolean", default: false },
     "no-open": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
@@ -38,7 +40,7 @@ const folder = positionals[0] ?? ".";
 const started = performance.now();
 let vault: Vault;
 try {
-  vault = await Vault.open(folder);
+  vault = await Vault.open(folder, { allow: values.allow ?? [] });
 } catch (err) {
   const code = (err as NodeJS.ErrnoException).code;
   console.error(code === "ENOENT" ? `brainview: ${folder} does not exist` : `brainview: ${err instanceof VaultPathError ? err.message : String(err)}`);
@@ -64,6 +66,7 @@ const server = listen();
 const url = `http://localhost:${server.port}`;
 const seconds = ((performance.now() - started) / 1000).toFixed(1);
 console.log(`brainview  ${vault.size} notes from ${vault.root} in ${seconds}s`);
+for (const mount of vault.mounts) console.log(`           also showing files from ${mount.root}`);
 console.log(`           ${url}${process.env.BRAINVIEW_DEV ? "  (API only; open the Vite URL)" : ""}`);
 console.log(`           AI: ${ai.status().available ? ai.model : "off — set ANTHROPIC_API_KEY or run `ant auth login`"}`);
 

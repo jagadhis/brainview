@@ -19,6 +19,7 @@ Nothing is uploaded or hosted. brainview reads the folder, keeps an index in mem
 ## What you get
 
 - **Reader.** GitHub-flavoured Markdown with tables, task lists, footnotes, math (KaTeX), Mermaid diagrams, syntax-highlighted code with copy buttons, and safe raw HTML such as `<details>`. Frontmatter becomes a properties card: status fields as coloured badges, dates as dates, lists as chips, links to other notes as links, nested objects as tables.
+- **Artifacts.** HTML pages, images, video, audio, PDFs, Mermaid (`.mmd`), Graphviz (`.dot`) and Excalidraw files beside your notes appear in the sidebar and open in a viewer. A link in a note shows an inline preview, and ```` ```dot ```` code blocks render as Graphviz diagrams. Pass `--allow <folder>` to also show files from a folder outside the brain when notes link to them.
 - **Links in both directions.** Relative Markdown links, root-relative links and `[[wiki links]]` (by path, file name or title) all resolve. Each note shows its backlinks with context, its outgoing links, and dead links. Hover a link to preview the note.
 - **MDX without running code.** `.mdx` files are parsed, not executed. Components show as labelled blocks with their props, imports and expressions show as code, and HTML-like tags render as HTML. A file that does not parse falls back to Markdown with a notice.
 - **Editor.** Press `E` on any note. You get a CodeMirror source editor with live preview (source, split or preview), and a properties form that rewrites only the key you change, so every other byte of the file stays as it was. Saving checks that the file has not changed on disk since you opened it. If it has, you see a diff and choose. Files with `generated: true` in their frontmatter warn before saving.
@@ -46,6 +47,7 @@ brainview [folder] [options]
 
   -p, --port <n>      Port on 127.0.0.1 (default 4700, or the next free one)
       --model <id>    Claude model for AI features
+      --allow <dir>   Also show files from this folder when notes link to them, read-only (repeatable)
       --read-only     Disable saving
       --no-open       Do not open the browser
 ```
@@ -67,7 +69,7 @@ Hidden files and folders (names starting with a dot), `node_modules`, `dist`, `b
 - The server listens only on `127.0.0.1`. It refuses requests whose `Host` is not local, to block DNS rebinding. It refuses writes whose `Origin` is a different site, or whose body is not JSON.
 - Reads and writes are confined to the folder. Paths with `..`, absolute paths, and symlinks that escape the folder are refused. Only `.md`, `.mdx` and `.markdown` files can be written.
 - Writes are atomic (temporary file, then rename), keep the file's permissions, and fail with a conflict instead of overwriting a newer version.
-- Files served from the folder (images and attachments) are sent with `Content-Security-Policy: sandbox`, so an SVG or HTML file cannot run script in the app.
+- Files served from the folder are sent with `Content-Security-Policy: sandbox`, so an SVG cannot run script in the app. HTML artifacts run script in a sandbox with an opaque origin. They cannot read the API, your notes or browser storage, cannot fetch from other sites, and load only files from their own folder. Another website cannot load files from the brain into its pages.
 
 ## Development
 

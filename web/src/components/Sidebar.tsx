@@ -1,11 +1,13 @@
 import { BrainCircuit, ChevronRight, FileText, Folder, FolderOpen, HeartPulse, LayoutDashboard, Network, Search, Sparkles, Table2, X } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import type { NoteSummary } from "../../../src/shared/types.ts";
-import { useInfo, useNotes } from "../lib/queries.ts";
-import { noteHref, pathFromRoute } from "../lib/routes.ts";
+import { basename } from "../../../src/shared/paths.ts";
+import type { ArtifactSummary, NoteSummary } from "../../../src/shared/types.ts";
+import { useArtifacts, useInfo, useNotes } from "../lib/queries.ts";
+import { artifactHref, noteHref, pathFromRoute } from "../lib/routes.ts";
 import { buildTree, type TreeFolder } from "../lib/tree.ts";
 import { useUi } from "../lib/ui-state.tsx";
+import { ARTIFACT_ICONS } from "./ArtifactView.tsx";
 import { clsx, FolderDot } from "./ui.tsx";
 
 const EXPANDED_KEY = "brainview:expanded";
@@ -37,9 +39,10 @@ export function Sidebar() {
   const { setPaletteOpen, setAskOpen } = useUi();
   const [filter, setFilter] = useState("");
   const { expanded, toggle, setExpanded } = useExpanded();
-  const current = location.startsWith("/note/") ? pathFromRoute(location.slice(6)) : null;
+  const { data: artifacts } = useArtifacts();
+  const current = location.startsWith("/note/") ? pathFromRoute(location.slice(6)) : location.startsWith("/artifact/") ? pathFromRoute(location.slice(10)) : null;
 
-  const tree = useMemo(() => buildTree(notes ?? []), [notes]);
+  const tree = useMemo(() => buildTree(notes ?? [], artifacts ?? []), [notes, artifacts]);
 
   useEffect(() => {
     if (!current) return;
@@ -177,9 +180,30 @@ const FolderChildren = memo(function FolderChildren({
       {folder.notes.map((note) => (
         <NoteRow key={note.path} note={note} depth={depth} active={note.path === current} />
       ))}
+      {folder.artifacts.map((artifact) => (
+        <ArtifactRow key={artifact.path} artifact={artifact} depth={depth} active={artifact.path === current} />
+      ))}
     </>
   );
 });
+
+function ArtifactRow({ artifact, depth, active }: { artifact: ArtifactSummary; depth: number; active: boolean }) {
+  const Icon = ARTIFACT_ICONS[artifact.kind];
+  return (
+    <Link
+      href={artifactHref(artifact.path)}
+      title={artifact.path}
+      className={clsx(
+        "flex h-7 items-center gap-1.5 rounded-md pr-2 text-[13px] transition",
+        active ? "bg-accent-soft font-medium text-accent-ink" : "text-ink-soft hover:bg-sunken hover:text-ink",
+      )}
+      style={{ paddingLeft: 6 + depth * 12 + 15 }}
+    >
+      <Icon size={13.5} className={clsx("shrink-0", active ? "text-accent" : "text-ink-faint")} />
+      <span className="truncate">{basename(artifact.path)}</span>
+    </Link>
+  );
+}
 
 function NoteRow({ note, depth, active, showFolder }: { note: NoteSummary; depth: number; active: boolean; showFolder?: boolean }) {
   return (

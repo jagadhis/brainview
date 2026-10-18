@@ -1,3 +1,4 @@
+import type { ArtifactKind } from "./artifacts.ts";
 export type Frontmatter = Record<string, unknown>;
 
 export interface NoteSummary {
@@ -105,6 +106,20 @@ export interface VaultInfo {
   noteCount: number;
   readOnly: boolean;
   ai: AiStatus;
+  /** Folders outside the vault that were allowed with --allow, served read-only under /mounts/<name>/. */
+  mounts: Mount[];
+}
+
+export interface Mount {
+  name: string;
+  root: string;
+}
+
+export interface ArtifactSummary {
+  path: string;
+  kind: ArtifactKind;
+  size: number;
+  mtime: number;
 }
 
 export interface AiStatus {

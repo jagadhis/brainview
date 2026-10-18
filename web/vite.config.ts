@@ -16,6 +16,8 @@ export default defineConfig({
     // The API accepts writes only from its own origin, so the proxy presents that origin. With CORS off,
     // other localhost sites cannot pass a preflight to reach the proxy.
     cors: false,
-    proxy: { "/api": { target: "http://127.0.0.1:4710", changeOrigin: true, headers: { origin: "http://127.0.0.1:4710" } } },
+    proxy: Object.fromEntries(
+      ["/api", "/files/", "/mounts/", "/t/"].map((path) => [path, { target: "http://127.0.0.1:4710", changeOrigin: true, headers: { origin: "http://127.0.0.1:4710" } }]),
+    ),
   },
 });

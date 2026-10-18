@@ -13,11 +13,17 @@ import remarkMath from "remark-math";
 import remarkMdx from "remark-mdx";
 import remarkParse from "remark-parse";
 import { unified, type PluggableList } from "unified";
-import type { OutgoingLink } from "../../../src/shared/types.ts";
+import { visit } from "unist-util-visit";
+import type { Root } from "hast";
+import { artifactKind } from "../../../src/shared/artifacts.ts";
+import type { OutgoingLink, VaultInfo } from "../../../src/shared/types.ts";
 import { isExternalHref } from "../../../src/shared/links.ts";
-import { dirname, joinPath, normalizePath } from "../../../src/shared/paths.ts";
-import { assetUrl } from "../lib/api.ts";
+import { dirname, isOutsideVault, joinPath, normalizePath } from "../../../src/shared/paths.ts";
+import { useInfo } from "../lib/queries.ts";
 import { remarkMdxPreview, remarkWikiLinks } from "../lib/remark.ts";
+import { artifactHref, fileUrl, mountedFileUrl } from "../lib/routes.ts";
+import { ArtifactEmbed } from "./ArtifactView.tsx";
+import { Graphviz } from "./Diagrams.tsx";
 import { Mermaid } from "./Mermaid.tsx";
 import { NoteLink } from "./NoteLink.tsx";
 
@@ -33,6 +39,34 @@ const schema = {
     video: ["src", "controls", "width", "height", "poster"],
   },
 };
+
+/**
+ * Marks a link that is the only content of its paragraph, so an artifact it points to can preview open,
+ * and turns that paragraph into a div because the preview is block content.
+ */
+function rehypeStandaloneLinks() {
+  return (tree: Root) => {
+    visit(tree, "element", (node) => {
+      if (node.tagName !== "p") return;
+      const content = node.children.filter((c) => !(c.type === "text" && c.value.trim() === ""));
+      const only = content[0];
+      if (content.length !== 1 || only?.type !== "element" || only.tagName !== "a") return;
+      only.properties = { ...only.properties, dataStandalone: true };
+      node.tagName = "div";
+    });
+  };
+}
+
+/** The URL a note's file reference loads from: the vault, an allowed folder, or null when brainview may not serve it. */
+function fileSource(src: string, fromPath: string, info: VaultInfo | undefined): string | null {
+  if (src.startsWith("/")) {
+    const mounted = info ? mountedFileUrl(src, info.root, info.mounts) : null;
+    return mounted ?? fileUrl(normalizePath(src));
+  }
+  const path = joinPath(dirname(fromPath), decodeURI(src));
+  if (!isOutsideVault(path)) return fileUrl(path);
+  return info ? mountedFileUrl(path, info.root, info.mounts) : null;
+}
 
 const keepWikiLinks = (url: string) => (url.startsWith("wiki:") ? url : defaultUrlTransform(url));
 
@@ -66,6 +100,7 @@ function CodeBlock({ node, children }: { node?: Element; children?: ReactNode })
   const [copied, setCopied] = useState(false);
 
   if (language === "mermaid") return <Mermaid code={raw} />;
+  if (language === "dot" || language === "graphviz") return <Graphviz code={raw} />;
   return (
     <div className="group relative not-prose my-5">
       <div className="absolute right-2 top-2 flex items-center gap-1.5 opacity-0 transition group-hover:opacity-100">
@@ -142,13 +177,15 @@ function MarkdownView({ source, path, kind, outgoing, resolveNote }: MarkdownPro
     [useMdx],
   );
   const rehypePlugins: PluggableList = useMemo(
-    () => [...(useMdx ? [] : [rehypeRaw]), [rehypeSanitize, schema], rehypeKatex, rehypeSlug, [rehypeHighlight, { plainText: ["mermaid", "text", "txt", "plain"] }]],
+    () => [...(useMdx ? [] : [rehypeRaw]), [rehypeSanitize, schema], rehypeStandaloneLinks, rehypeKatex, rehypeSlug, [rehypeHighlight, { plainText: ["mermaid", "dot", "graphviz", "text", "txt", "plain"] }]],
     [useMdx],
   );
 
+  const { data: info } = useInfo();
+
   const components: Components = useMemo(
     () => ({
-      a({ href = "", children }) {
+      a({ href = "", children, node }) {
         if (href.startsWith("wiki:")) {
           const [raw, anchor] = href.slice(5).split("#");
           const link = byRaw.get(`wiki:${raw!.trim()}`) ?? resolveNote?.(raw!.trim(), "wiki") ?? null;
@@ -165,11 +202,24 @@ function MarkdownView({ source, path, kind, outgoing, resolveNote }: MarkdownPro
         }
         const link = byRaw.get(`markdown:${href}`) ?? resolveNote?.(href, "markdown") ?? null;
         const anchor = href.includes("#") ? href.slice(href.indexOf("#") + 1) : undefined;
+        const kind = link?.target ? artifactKind(link.target) : null;
+        const open = node?.properties?.dataStandalone === true;
+        if (kind && link?.status === "file") {
+          return <ArtifactEmbed kind={kind} url={fileUrl(link.target!)} path={link.target!} viewerHref={artifactHref(link.target!)} label={children} open={open} />;
+        }
+        const mounted = kind && link?.status === "outside" && info ? mountedFileUrl(link.target!, info.root, info.mounts) : null;
+        if (kind && mounted) return <ArtifactEmbed kind={kind} url={mounted} path={link!.target!} viewerHref={null} label={children} open={open} />;
         return <NoteLink link={link} anchor={anchor} label={children} />;
       },
       img({ src = "", alt }) {
-        const url = typeof src === "string" && !isExternalHref(src) && !src.startsWith("data:") ? assetUrl(src.startsWith("/") ? normalizePath(src) : joinPath(dirname(path), decodeURI(src))) : String(src);
+        const external = typeof src !== "string" || isExternalHref(src) || src.startsWith("data:");
+        const url = external ? String(src) : fileSource(src, path, info);
+        if (!url) return <span className="text-[13px] text-ink-faint" title={String(src)}>[Image outside this brain: {alt || String(src)}]</span>;
         return <img src={url} alt={alt ?? ""} loading="lazy" />;
+      },
+      video({ src = "", node: _node, ...rest }) {
+        const external = typeof src !== "string" || isExternalHref(src);
+        return <video {...rest} src={external ? String(src) : (fileSource(src, path, info) ?? undefined)} />;
       },
       pre: CodeBlock,
       div(props) {
@@ -190,7 +240,7 @@ function MarkdownView({ source, path, kind, outgoing, resolveNote }: MarkdownPro
         );
       },
     }),
-    [byRaw, path, resolveNote],
+    [byRaw, path, resolveNote, info],
   );
 
   return (

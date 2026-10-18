@@ -75,14 +75,59 @@ describe("Vault.save", () => {
     expect(await readFile(join(dir, "secret.md"), "utf8")).toBe("outside the vault");
   });
 
-  test("refuses to read assets outside the vault", async () => {
-    await expect(vault.readAsset("../secret.md")).rejects.toBeInstanceOf(VaultPathError);
+  test("refuses to read files outside the vault", async () => {
+    await expect(vault.filePath("../secret.md")).rejects.toBeInstanceOf(VaultPathError);
   });
 
   test("refuses hidden files and folders, which the index never shows", async () => {
     await writeFile(join(dir, "brain", ".env"), "TOKEN=x");
-    await expect(vault.readAsset(".env")).rejects.toBeInstanceOf(VaultPathError);
+    await expect(vault.filePath(".env")).rejects.toBeInstanceOf(VaultPathError);
     await expect(vault.save(".claude/agents/planted.md", "x", null)).rejects.toBeInstanceOf(VaultPathError);
     expect(await Bun.file(join(dir, "brain", ".claude", "agents", "planted.md")).exists()).toBe(false);
+  });
+
+  test("refuses a symlink that points at a hidden file, whatever the link is named", async () => {
+    await writeFile(join(dir, "brain", ".env"), "TOKEN=x");
+    await symlink("../.env", join(dir, "brain", "items", "config.js"));
+    await expect(vault.filePath("items/config.js")).rejects.toBeInstanceOf(VaultPathError);
+  });
+});
+
+describe("Artifacts and allowed folders", () => {
+  test("indexes artifact files beside the notes, and skips files it cannot show", async () => {
+    await writeFile(join(dir, "brain", "items", "chart.html"), "<p>chart</p>");
+    await writeFile(join(dir, "brain", "items", "flow.excalidraw"), "{}");
+    await writeFile(join(dir, "brain", "items", "notes.txt"), "plain");
+    const reopened = await Vault.open(join(dir, "brain"));
+    expect(reopened.listArtifacts().map((a) => [a.path, a.kind]).sort()).toEqual([
+      ["items/chart.html", "html"],
+      ["items/flow.excalidraw", "excalidraw"],
+    ]);
+    reopened.close();
+  });
+
+  test("serves a file from an allowed folder, and nothing outside it", async () => {
+    await mkdir(join(dir, "output", "run"), { recursive: true });
+    await writeFile(join(dir, "output", "run", "video.mp4"), "video");
+    await writeFile(join(dir, "output", ".env"), "TOKEN=x");
+    await symlink(dir, join(dir, "output", "escape"));
+    const allowed = await Vault.open(join(dir, "brain"), { allow: [join(dir, "output")] });
+    expect(allowed.mounts.map((m) => m.name)).toEqual(["output"]);
+
+    expect(await allowed.mountFilePath("output", "run/video.mp4")).toEndWith(join("output", "run", "video.mp4"));
+    expect(await allowed.mountFilePath("output", "run/missing.mp4")).toBeNull();
+    expect(await allowed.mountFilePath("other", "run/video.mp4")).toBeNull();
+    await expect(allowed.mountFilePath("output", "../secret.md")).rejects.toBeInstanceOf(VaultPathError);
+    await expect(allowed.mountFilePath("output", ".env")).rejects.toBeInstanceOf(VaultPathError);
+    await expect(allowed.mountFilePath("output", "escape/secret.md")).rejects.toBeInstanceOf(VaultPathError);
+    allowed.close();
+  });
+
+  test("gives two allowed folders with the same name distinct mount names", async () => {
+    await mkdir(join(dir, "a", "output"), { recursive: true });
+    await mkdir(join(dir, "b", "output"), { recursive: true });
+    const allowed = await Vault.open(join(dir, "brain"), { allow: [join(dir, "a", "output"), join(dir, "b", "output")] });
+    expect(allowed.mounts.map((m) => m.name)).toEqual(["output", "output-2"]);
+    allowed.close();
   });
 });

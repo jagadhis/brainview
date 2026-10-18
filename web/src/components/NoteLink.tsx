@@ -5,9 +5,9 @@ import { Link } from "wouter";
 import { splitFrontmatter } from "../../../src/shared/frontmatter.ts";
 import { toPlainText } from "../../../src/shared/text.ts";
 import type { OutgoingLink } from "../../../src/shared/types.ts";
-import { api, assetUrl } from "../lib/api.ts";
-import { keys, useNoteMap } from "../lib/queries.ts";
-import { noteHref } from "../lib/routes.ts";
+import { api } from "../lib/api.ts";
+import { keys, useInfo, useNoteMap } from "../lib/queries.ts";
+import { fileUrl, mountedFileUrl, noteHref } from "../lib/routes.ts";
 
 export function NoteLink({ link, anchor, label }: { link: Pick<OutgoingLink, "status" | "target" | "raw"> | null; anchor?: string; label: ReactNode }) {
   if (!link || link.status === "dead") {
@@ -17,23 +17,36 @@ export function NoteLink({ link, anchor, label }: { link: Pick<OutgoingLink, "st
       </a>
     );
   }
-  if (link.status === "outside") {
-    return (
-      <a className="link-outside cursor-help" title={`Outside this brain: ${link.target}`}>
-        {label}
-        <ArrowUpRight size={11} className="ml-0.5 inline -translate-y-px opacity-50" />
-      </a>
-    );
-  }
+  if (link.status === "outside") return <OutsideLink target={link.target!} label={label} />;
   if (link.status === "file") {
     return (
-      <a href={assetUrl(link.target!)} target="_blank" rel="noreferrer">
+      <a href={fileUrl(link.target!)} target="_blank" rel="noreferrer">
         {label}
         <Paperclip size={11} className="ml-0.5 inline -translate-y-px opacity-50" />
       </a>
     );
   }
   return <InternalLink path={link.target!} anchor={anchor} label={label} />;
+}
+
+/** A file outside the brain opens only when it sits in a folder allowed with --allow. */
+function OutsideLink({ target, label }: { target: string; label: ReactNode }) {
+  const { data: info } = useInfo();
+  const url = info ? mountedFileUrl(target, info.root, info.mounts) : null;
+  if (url) {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" title={target}>
+        {label}
+        <Paperclip size={11} className="ml-0.5 inline -translate-y-px opacity-50" />
+      </a>
+    );
+  }
+  return (
+    <a className="link-outside cursor-help" title={`Outside this brain: ${target}. Start brainview with --allow <folder> to show it.`}>
+      {label}
+      <ArrowUpRight size={11} className="ml-0.5 inline -translate-y-px opacity-50" />
+    </a>
+  );
 }
 
 function InternalLink({ path, anchor, label }: { path: string; anchor?: string; label: ReactNode }) {

@@ -1,4 +1,5 @@
 import type {
+  ArtifactSummary,
   AskEvent,
   AskRequest,
   AssistRequest,
@@ -39,6 +40,7 @@ const post = (body: unknown, method = "POST"): RequestInit => ({
 export const api = {
   info: () => request<VaultInfo>("/api/info"),
   notes: () => request<NoteSummary[]>("/api/notes"),
+  artifacts: () => request<ArtifactSummary[]>("/api/artifacts"),
   note: (path: string) => request<NoteDetail>(`/api/note?path=${encodeURIComponent(path)}`),
   search: (q: string, limit = 20) => request<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   graph: () => request<GraphData>("/api/graph"),
@@ -51,10 +53,6 @@ export const api = {
 
 export function isConflict(err: unknown): err is ApiError & { body: ConflictResponse } {
   return err instanceof ApiError && err.status === 409;
-}
-
-export function assetUrl(path: string): string {
-  return `/api/asset?path=${encodeURIComponent(path)}`;
 }
 
 /** Streams newline-delimited JSON events from an AI endpoint. */

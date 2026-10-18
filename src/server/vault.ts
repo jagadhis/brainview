@@ -3,13 +3,16 @@ import { existsSync, watch, type FSWatcher } from "node:fs";
 import { chmod, lstat, mkdir, readdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import MiniSearch from "minisearch";
+import { artifactKind } from "../shared/artifacts.ts";
 import { resolveLink, type LinkTargetIndex } from "../shared/links.ts";
 import { basename, dirname, isNotePath, stripExtension } from "../shared/paths.ts";
 import { toPlainText } from "../shared/text.ts";
 import type {
+  ArtifactSummary,
   Backlink,
   GraphData,
   HealthReport,
+  Mount,
   NoteDetail,
   NoteSummary,
   OutgoingLink,
@@ -49,8 +52,58 @@ function folderOf(path: string): string {
   return dirname(path);
 }
 
+/** Resolves a path relative to `root`, refusing absolute paths, hidden parts and anything that leaves the root. */
+function resolveInside(root: string, path: string, label: string): string {
+  if (typeof path !== "string" || path === "" || path.includes("\0")) throw new VaultPathError("Invalid path");
+  if (path.startsWith("/") || /^[a-z]:/i.test(path)) throw new VaultPathError(`Paths must be relative to the ${label}`);
+  // Scanning and watching skip dot folders, so nothing should read or write files such as .env or .claude/ either.
+  if (path.split(/[/\\]/).some((part) => part.startsWith(".") && part !== "." && part !== "..")) throw new VaultPathError(`Hidden paths are not part of the ${label}`);
+  const full = resolve(root, path);
+  if (full !== root && !full.startsWith(root + sep)) throw new VaultPathError(`Path is outside the ${label}`);
+  return full;
+}
+
+/** Refuses a path whose nearest existing ancestor resolves, through symlinks, outside `root`. */
+async function assertRealPathInside(root: string, full: string, label: string): Promise<void> {
+  let dir = full;
+  while (!existsSync(dir)) dir = resolve(dir, "..");
+  const real = await realpath(dir);
+  if (real !== root && !real.startsWith(root + sep)) throw new VaultPathError(`Path is outside the ${label}`);
+}
+
+/**
+ * The real path of a file inside `root`, or null when there is no such file. Checked after following symlinks, so a link
+ * cannot expose a hidden file such as .env, and the caller picks the file type from the target rather than the link's name.
+ */
+async function realFileInside(root: string, full: string, label: string): Promise<string | null> {
+  let real: string;
+  try {
+    real = await realpath(full);
+  } catch {
+    return null;
+  }
+  resolveInside(root, relative(root, real), label);
+  return (await stat(real)).isFile() ? real : null;
+}
+
+/** Names each allowed folder after its last segment, made unique and URL-safe. */
+async function openMounts(folders: string[]): Promise<Mount[]> {
+  const mounts: Mount[] = [];
+  for (const folder of folders) {
+    const root = await realpath(resolve(folder));
+    if (!(await stat(root)).isDirectory()) throw new VaultPathError(`${folder} is not a folder`);
+    if (mounts.some((m) => m.root === root)) continue;
+    const base = basename(root.split(sep).join("/")).replace(/[^A-Za-z0-9._-]/g, "-").replace(/^\.+/, "") || "folder";
+    let name = base;
+    for (let n = 2; mounts.some((m) => m.name === name); n++) name = `${base}-${n}`;
+    mounts.push({ name, root });
+  }
+  return mounts;
+}
+
 export class Vault {
   private notes = new Map<string, NoteRecord>();
+  private artifacts = new Map<string, ArtifactSummary>();
   private backlinks = new Map<string, Backlink[]>();
   private search = this.createSearch();
   private watcher: FSWatcher | null = null;
@@ -59,13 +112,17 @@ export class Vault {
   private listeners = new Set<(paths: string[]) => void>();
   private existsCache = new Map<string, boolean>();
 
-  private constructor(readonly root: string) {}
+  private constructor(
+    readonly root: string,
+    readonly mounts: Mount[],
+  ) {}
 
-  static async open(folder: string): Promise<Vault> {
+  /** `allow` names folders outside the vault whose files may be shown read-only, such as artifacts that notes link to. */
+  static async open(folder: string, { allow = [] }: { allow?: string[] } = {}): Promise<Vault> {
     const root = await realpath(resolve(folder));
     const info = await stat(root);
     if (!info.isDirectory()) throw new VaultPathError(`${folder} is not a folder`);
-    const vault = new Vault(root);
+    const vault = new Vault(root, await openMounts(allow));
     await vault.scan();
     return vault;
   }
@@ -82,20 +139,11 @@ export class Vault {
 
   /** Resolves a vault-relative path to an absolute path, refusing anything that leaves the vault. */
   absolutePath(path: string): string {
-    if (typeof path !== "string" || path === "" || path.includes("\0")) throw new VaultPathError("Invalid path");
-    if (path.startsWith("/") || /^[a-z]:/i.test(path)) throw new VaultPathError("Paths must be relative to the vault");
-    // Scanning and watching skip dot folders, so nothing should read or write files such as .env or .claude/ either.
-    if (path.split(/[/\\]/).some((part) => part.startsWith(".") && part !== "." && part !== "..")) throw new VaultPathError("Hidden paths are not part of the vault");
-    const full = resolve(this.root, path);
-    if (full !== this.root && !full.startsWith(this.root + sep)) throw new VaultPathError("Path is outside the vault");
-    return full;
+    return resolveInside(this.root, path, "vault");
   }
 
   private async assertRealPathInside(full: string): Promise<void> {
-    let dir = full;
-    while (!existsSync(dir)) dir = resolve(dir, "..");
-    const real = await realpath(dir);
-    if (real !== this.root && !real.startsWith(this.root + sep)) throw new VaultPathError("Path is outside the vault");
+    await assertRealPathInside(this.root, full, "vault");
   }
 
   private toVaultPath(full: string): string {
@@ -114,7 +162,7 @@ export class Vault {
           const full = join(dir, entry.name);
           if (entry.isDirectory()) {
             if (!IGNORED_DIRS.has(entry.name)) await walk(full);
-          } else if (entry.isFile() && isNotePath(entry.name)) {
+          } else if (entry.isFile() && (isNotePath(entry.name) || artifactKind(entry.name))) {
             files.push(full);
           }
         }),
@@ -126,6 +174,8 @@ export class Vault {
   }
 
   private async load(path: string): Promise<boolean> {
+    const kind = artifactKind(path);
+    if (kind && !isNotePath(path)) return this.loadArtifact(path, kind);
     const full = this.absolutePath(path);
     try {
       const info = await lstat(full);
@@ -146,6 +196,19 @@ export class Vault {
       return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return this.unload(path);
+      throw err;
+    }
+  }
+
+  private async loadArtifact(path: string, kind: ArtifactSummary["kind"]): Promise<boolean> {
+    try {
+      const info = await lstat(this.absolutePath(path));
+      if (!info.isFile()) return this.artifacts.delete(path);
+      const before = this.artifacts.get(path);
+      this.artifacts.set(path, { path, kind, size: info.size, mtime: info.mtimeMs });
+      return !before || before.mtime !== info.mtimeMs || before.size !== info.size;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return this.artifacts.delete(path);
       throw err;
     }
   }
@@ -371,14 +434,20 @@ export class Vault {
     };
   }
 
-  async readAsset(path: string): Promise<{ full: string } | null> {
-    const full = this.absolutePath(path);
-    await this.assertRealPathInside(full);
-    try {
-      return (await stat(full)).isFile() ? { full } : null;
-    } catch {
-      return null;
-    }
+  listArtifacts(): ArtifactSummary[] {
+    return [...this.artifacts.values()];
+  }
+
+  /** The absolute path of a file inside the vault, or null when there is no such file. */
+  async filePath(path: string): Promise<string | null> {
+    return realFileInside(this.root, this.absolutePath(path), "vault");
+  }
+
+  /** The absolute path of a file inside an allowed folder, or null when the folder or file does not exist. */
+  async mountFilePath(name: string, path: string): Promise<string | null> {
+    const mount = this.mounts.find((m) => m.name === name);
+    if (!mount) return null;
+    return realFileInside(mount.root, resolveInside(mount.root, path, "allowed folder"), "allowed folder");
   }
 
   // ---------- writes
@@ -431,7 +500,7 @@ export class Vault {
     this.watcher = watch(this.root, { recursive: true }, (_event, filename) => {
       if (!filename) return;
       const path = filename.toString().split(sep).join("/");
-      if (!isNotePath(path) || path.split("/").some((part) => part.startsWith(".") || IGNORED_DIRS.has(part))) return;
+      if (!(isNotePath(path) || artifactKind(path)) || path.split("/").some((part) => part.startsWith(".") || IGNORED_DIRS.has(part))) return;
       this.pending.add(path);
       if (this.flushTimer) clearTimeout(this.flushTimer);
       this.flushTimer = setTimeout(() => void this.flush(), 150);
@@ -443,6 +512,10 @@ export class Vault {
     this.pending.clear();
     const changed: string[] = [];
     for (const path of paths) {
+      if (artifactKind(path) && !isNotePath(path)) {
+        if (await this.load(path).catch(() => false)) changed.push(path);
+        continue;
+      }
       const before = this.notes.get(path)?.hash;
       const present = await this.load(path).catch(() => false);
       const after = this.notes.get(path)?.hash;
