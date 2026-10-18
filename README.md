@@ -54,6 +54,10 @@ brainview [folder] [options]
 
 Hidden files and folders (names starting with a dot), `node_modules`, `dist`, `build`, `target` and `out` are skipped. Symlinks are not followed.
 
+## For AI agents
+
+If you are an agent or model pointed at brainview, read [AGENTS.md](AGENTS.md). It covers what to tell a user brainview does for them, how to start it, the local JSON API (search, notes, backlinks, graph, health), and the rules for editing notes. [llms.txt](llms.txt) is the short version. Both ship in the npm package.
+
 ## Keyboard
 
 | Keys | Action |

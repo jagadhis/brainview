@@ -29,7 +29,9 @@
     "src",
     "!src/**/*.test.ts",
     "dist",
-    "README.md"
+    "README.md",
+    "AGENTS.md",
+    "llms.txt"
   ],
   "scripts": {
     "dev": "bun run dev:server & vite --config web/vite.config.ts",

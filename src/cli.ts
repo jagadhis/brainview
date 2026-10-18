@@ -17,7 +17,9 @@ Options
       --no-open       Do not open the browser
   -h, --help          Show this help
 
-AI features use ANTHROPIC_API_KEY or an \`ant auth login\` profile. Without one, everything else still works.`;
+AI features use ANTHROPIC_API_KEY or an \`ant auth login\` profile. Without one, everything else still works.
+
+AI agents: AGENTS.md in this package covers the local JSON API and the rules for editing notes.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
