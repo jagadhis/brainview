@@ -14,6 +14,24 @@ bun install && bun run build
 bun src/cli.ts ~/notes
 ```
 
+## Updating
+
+Nothing is migrated when you update. brainview never rewrites your notes at startup, every `.brainview.json` key is optional, and saved preferences (theme, sidebar mode, sort) stay in your browser. An existing setup keeps working.
+
+How you update depends on how you run it:
+
+| You run it with | Update with |
+|---|---|
+| `bunx brainview ~/notes` | `bunx brainview@latest ~/notes`. `bunx` can reuse a copy it already downloaded, so ask for `@latest` when you want the newest. |
+| A global install (`bun add -g brainview`) | `bun add -g brainview@latest` |
+| A global npm install (`npm install -g brainview`) | `npm install -g brainview@latest` (Bun must still be installed, because the CLI runs on it) |
+| A clone of the repository | `git pull && bun install && bun run build`. Skipping the build leaves the old UI. |
+| An MCP client entry (see [MCP server](#mcp-server)) | Change `brainview` to `brainview@latest` in the entry's arguments, or pin a version such as `brainview@0.3.0`, then restart the client. |
+
+Then restart a running brainview (Ctrl+C, start it again) and reload the browser tab, which keeps the old UI until you do. `npm view brainview version` prints the newest published version.
+
+The MCP server, `brainview export` and workstreams are newer than 0.2.2. If you are on 0.2.2 or older, update to get them.
+
 Nothing is uploaded or hosted. brainview reads the folder, keeps an index in memory, watches for changes, and serves the UI on `127.0.0.1`.
 
 ## What you get
@@ -99,11 +117,62 @@ Only `name` is required. `description`, `folder`, `template` and `required` are 
 
 ## MCP server
 
-`brainview mcp ~/notes` serves the folder to an MCP client such as Claude Code or Claude Desktop over stdio. The client can search notes, read them with their links and backlinks, list notes, tags and related notes, list workstreams and their instances, get stream suggestions for unassigned notes, and run the health check. The server tells the client the brain's workstreams and filing rules when it connects, and the same guide is the `brainview://guide` resource. With `--write` it can also save notes, set single properties, create a note in a stream from the stream's template, move a note to another stream and add a stream, with the same conflict check as the editor.
+`brainview mcp <folder>` serves a folder of notes to an MCP client such as Claude Code or Claude Desktop, so an agent can search, read, file and edit your notes. It talks over stdio, runs on your machine, and never calls an AI model itself.
+
+### Set it up
+
+Claude Code:
 
 ```sh
 claude mcp add brainview -- bunx brainview mcp ~/notes
 ```
+
+This adds it for the current project. Add `--scope user` right after `add` to make it available everywhere. Check with `claude mcp list`.
+
+Claude Desktop and other MCP clients take the same command in their JSON settings. In Claude Desktop that is `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and `%APPDATA%\Claude\claude_desktop_config.json` on Windows:
+
+```json
+{ "mcpServers": { "brainview": { "command": "bunx", "args": ["brainview", "mcp", "/absolute/path/to/notes"] } } }
+```
+
+Use an absolute path for the folder. If the client cannot find `bunx`, put the full path from `which bunx` in `command`. Restart the client after you edit its settings.
+
+The server is read-only by default. To let the agent change notes, add `--write` after the folder (`bunx brainview mcp ~/notes --write`). Without it the write tools are not offered at all. Turn it on only when you want the agent to edit.
+
+To update the server, see [Updating](#updating).
+
+### What the agent gets
+
+When a client connects, the server tells it the brain's workstreams and their filing rules (taken from `.brainview.json`, so they follow your settings). The same guide is the `brainview://guide` resource.
+
+| Tool | Needs `--write` | Inputs | What it does |
+|---|---|---|---|
+| `search_notes` | no | `query`, `limit` (1–50) | Full-text search over titles, headings, frontmatter and text. Returns paths, titles and a snippet. |
+| `read_note` | no | `path` | The note's Markdown, frontmatter, outgoing links and backlinks, and the `hash` needed to edit it. |
+| `list_notes` | no | `folder`, `limit` (1–500) | Notes under a folder, newest first, with link counts and tags. |
+| `backlinks` | no | `path` | Notes that link to this one, with the linking line. |
+| `related_notes` | no | `path`, `limit` (1–30) | Notes that share links or wording with this one. |
+| `list_tags` | no | none | Every tag with its count and notes. |
+| `health` | no | none | Dead links with likely fixes, ambiguous links, orphans, duplicate titles, bad frontmatter and schema problems. |
+| `list_workstreams` | no | none | Each stream with its description, folder and instance count, and how many notes are Unassigned. |
+| `workstream` | no | `name`, `sort` (`updated`, `status`, `title` or `created`), `limit` | One stream's instances, newest first by default. |
+| `suggest_workstreams` | no | `limit` (1–200) | Likely streams for the newest Unassigned notes, each with a score and a reason. No AI is called. |
+| `write_note` | yes | `path`, `content`, `hash` | Replaces a note, or creates it when `hash` is left out. A stale `hash` is refused. |
+| `set_property` | yes | `path`, `key`, `value`, `hash` | Sets one top-level frontmatter key, or removes it when `value` is left out. Every other byte stays the same. |
+| `create_instance` | yes | `stream`, `title`, `path`, `fields` | Creates a note in the stream's folder from its template, with the stream field and any `fields` set. Fails if the note exists, or if the path is in the templates folder. |
+| `assign_workstream` | yes | `path`, `stream`, `mode` (`set` or `add`), `hash` | Files an existing note in a stream by setting its stream field. `add` keeps its other streams. |
+| `create_workstream` | yes | `name`, `description`, `folder`, `color` | Adds a stream to `.brainview.json` and keeps the rest of the file. Fails if the name exists. |
+
+Every tool that edits an existing note needs the `hash` from `read_note`, and fails with a conflict instead of overwriting a newer version. Paths are relative to the folder you served.
+
+`create_workstream` cannot set `match` rules, `template` or `required`. Edit `.brainview.json` for those. A stream without a template gets a bare note from `create_instance`.
+
+### Things to ask an agent
+
+- "Search my notes for the Northwind quote and summarise where it stands."
+- "Which notes are unassigned? Suggest streams for them." Then, with `--write`: "File the ones you are sure about."
+- "Add a LinkedIn post about lead times." With `--write` and a LinkedIn stream with a template, the agent creates the note from the template with `status` and `workstream` set.
+- "Run the health check and fix the dead links you can."
 
 ## Static export
 
