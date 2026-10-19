@@ -43,6 +43,8 @@ describe.skipIf(!built)("exportSite", () => {
     expect(alpha.frontmatter).toEqual({ status: "open" });
     expect(alpha.backlinks.map((b: { path: string }) => b.path)).toEqual(["README.md"]);
     expect(existsSync(join(out, "api", "search-index.json"))).toBe(true);
+    const workstreams = JSON.parse(await readFile(join(out, "api", "workstreams.json"), "utf8"));
+    expect(workstreams.unassigned.map((i: { path: string }) => i.path).sort()).toEqual(["README.md", "items/alpha.md"]);
     expect(await readFile(join(out, "files", "items", "chart.svg"), "utf8")).toBe("<svg xmlns=\"http://www.w3.org/2000/svg\"/>");
   });
 

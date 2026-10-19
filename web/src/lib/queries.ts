@@ -18,6 +18,8 @@ export const keys = {
   tags: ["tags"] as const,
   timeline: ["timeline"] as const,
   templates: ["templates"] as const,
+  workstreams: ["workstreams"] as const,
+  workstreamSuggestions: ["workstream-suggestions"] as const,
 };
 
 export const useInfo = () => useQuery({ queryKey: keys.info, queryFn: api.info, staleTime: 30_000 });
@@ -36,6 +38,7 @@ export const useOverview = () => useQuery({ queryKey: keys.overview, queryFn: ap
 export const useTags = () => useQuery({ queryKey: keys.tags, queryFn: api.tags, staleTime: Infinity });
 export const useTimeline = () => useQuery({ queryKey: keys.timeline, queryFn: () => api.timeline(), staleTime: Infinity });
 export const useTemplates = () => useQuery({ queryKey: keys.templates, queryFn: api.templates, staleTime: Infinity });
+export const useWorkstreams = (enabled = true) => useQuery({ queryKey: keys.workstreams, queryFn: api.workstreams, enabled, staleTime: Infinity, retry: false });
 
 export function useNoteMap(): Map<string, NoteListing> {
   const { data } = useNotes();
@@ -82,12 +85,14 @@ export function useLiveVault(onChanged?: (paths: string[]) => void): void {
       const notePaths = paths.filter(isNotePath);
       // A folder event can add or remove notes the event does not name, so it needs the full lists.
       const folderEvent = paths.some((p) => !isNotePath(p) && !/\.[^/]+$/.test(p));
+      // The config decides streams and schema for every note, not only the paths that changed.
+      const configChanged = paths.includes(".brainview.json");
       for (const path of notePaths) {
         client.invalidateQueries({ queryKey: keys.note(path) });
         client.invalidateQueries({ queryKey: keys.history(path) });
       }
       client.invalidateQueries({ queryKey: ["related"] });
-      if (folderEvent) {
+      if (folderEvent || configChanged) {
         client.invalidateQueries({ queryKey: keys.notes });
         client.invalidateQueries({ queryKey: keys.table });
       } else if (notePaths.length) {
@@ -98,7 +103,8 @@ export function useLiveVault(onChanged?: (paths: string[]) => void): void {
       }
       if (folderEvent || paths.some((p) => !isNotePath(p))) client.invalidateQueries({ queryKey: keys.artifacts });
       if (batch.links || folderEvent) client.invalidateQueries({ queryKey: keys.graph });
-      for (const key of [keys.health, keys.overview, keys.info, keys.tags, keys.timeline, keys.templates]) client.invalidateQueries({ queryKey: key });
+      // Workstreams always refetch: a change to one index note can move the notes folded under it.
+      for (const key of [keys.health, keys.overview, keys.info, keys.tags, keys.timeline, keys.templates, keys.workstreams]) client.invalidateQueries({ queryKey: key });
       onChanged?.(paths);
     };
     source.onmessage = (message) => {

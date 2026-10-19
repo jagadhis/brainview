@@ -32,6 +32,7 @@ import type {
 import { CONFIG_FILE, defaultConfig, formatDailyName, loadConfig, schemaIssues } from "./config.ts";
 import { parseNote, type ParsedNote } from "./parse.ts";
 import { contentWords } from "./stopwords.ts";
+import { listedStreams } from "./workstreams.ts";
 
 interface NoteRecord extends ParsedNote {
   path: string;
@@ -617,7 +618,7 @@ export class Vault {
       if (note.frontmatterError) frontmatterErrors.push({ path: note.path, error: note.frontmatterError });
       if (!this.isIndexNote(note.path) && !this.backlinks.has(note.path)) (underReachedFolder(note.path) ? reachedThroughFolder : orphans).push(note.path);
       if (note.words < 3) emptyNotes.push(note.path);
-      for (const issue of schemaIssues(this.config, note.frontmatter)) schema.push({ path: note.path, ...issue });
+      for (const issue of schemaIssues(this.config, note.frontmatter, listedStreams(note, this.config))) schema.push({ path: note.path, ...issue });
     }
     const duplicateTitles = [...byTitle.entries()]
       .filter(([, paths]) => paths.length > 1)
@@ -925,7 +926,8 @@ export class Vault {
       await this.refresh([to, ...updated]);
       this.relinkAll();
       this.emit([from, to, ...updated], true);
-      return { path: to, updated };
+      // Linkers come in scan order, which parallel reads make vary from run to run.
+      return { path: to, updated: updated.sort() };
     });
   }
 

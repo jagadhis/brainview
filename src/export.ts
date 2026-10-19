@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { VaultInfo } from "./shared/types.ts";
 import type { Vault } from "./server/vault.ts";
+import { buildWorkstreams } from "./server/workstreams.ts";
 
 const WEB_ROOT = fileURLToPath(new URL("../dist/web/", import.meta.url));
 
@@ -62,6 +63,7 @@ export async function exportSite(vault: Vault, outDir: string): Promise<{ notes:
   await writeJson(out, "api/overview.json", vault.overview());
   await writeJson(out, "api/tags.json", vault.tags());
   await writeJson(out, "api/timeline.json", vault.timeline(1000));
+  await writeJson(out, "api/workstreams.json", buildWorkstreams(vault.list(), vault.config));
   await writeFile(join(out, "api", "search-index.json"), await vault.exportSearchIndex());
 
   const notes = vault.listing();

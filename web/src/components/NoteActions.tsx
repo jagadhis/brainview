@@ -1,4 +1,4 @@
-import { Ellipsis, FolderInput, Trash2 } from "lucide-react";
+import { Ellipsis, FolderInput, Layers, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { api } from "../lib/api.ts";
@@ -16,6 +16,19 @@ export function useCanWrite(): boolean {
 export function useCurrentNotePath(): string | null {
   const [location] = useLocation();
   return location.startsWith("/note/") ? pathFromRoute(location.slice(6)) : null;
+}
+
+/**
+ * The stream field value that files a note into `to`: in place of `from` when given, otherwise added to the streams the
+ * field already names. A list stays a list; a single stream is written as a string.
+ */
+export function withStream(current: unknown, to: string, from?: string): unknown {
+  // Stream names match in any case, as the server matches them.
+  const same = (v: unknown, name: string) => typeof v === "string" && v.trim().toLowerCase() === name.toLowerCase();
+  const list: unknown[] = Array.isArray(current) ? current : typeof current === "string" && current.trim() ? [current] : [];
+  const kept = list.filter((v) => !same(v, to) && (from === undefined || !same(v, from)));
+  const next = [...kept, to];
+  return Array.isArray(current) || next.length > 1 ? next : to;
 }
 
 /** Opens today's daily note, creating it first when it does not exist yet. */
@@ -54,7 +67,7 @@ export function NoteActions({ path }: { path: string }) {
 
   if (!canWrite) return null;
 
-  const choose = (kind: "move" | "delete") => {
+  const choose = (kind: "move" | "delete" | "workstream") => {
     setOpen(false);
     setNoteDialog({ kind, path });
   };
@@ -67,6 +80,7 @@ export function NoteActions({ path }: { path: string }) {
       {open && (
         <div role="menu" className="animate-in absolute right-0 top-8 z-20 w-48 rounded-xl border border-line bg-raised p-1 shadow-lg shadow-black/10">
           <MenuItem icon={<FolderInput size={14} />} label="Rename or move…" onClick={() => choose("move")} />
+          <MenuItem icon={<Layers size={14} />} label="Move to workstream…" onClick={() => choose("workstream")} />
           <MenuItem icon={<Trash2 size={14} />} label="Delete…" danger onClick={() => choose("delete")} />
         </div>
       )}

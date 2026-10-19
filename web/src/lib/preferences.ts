@@ -1,3 +1,6 @@
+import type { WorkstreamSort } from "../../../src/shared/types.ts";
+import { WORKSTREAM_SORTS } from "../../../src/shared/workstreams.ts";
+
 export type ThemeMode = "light" | "dark" | "system";
 export type BaseTone = "neutral" | "warm" | "cool";
 export type TextSize = "small" | "medium" | "large";
@@ -7,6 +10,7 @@ export type NoteFont = "inter" | "figtree" | "serif";
 export type PropertiesFont = "inter" | "figtree" | "serif" | "mono";
 export type CodeFont = "jetbrains" | "fira" | "system";
 export type FolderPalette = "vivid" | "pastel" | "muted";
+export type SidebarMode = "folders" | "workstreams";
 
 export interface Preferences {
   mode: ThemeMode;
@@ -19,6 +23,9 @@ export interface Preferences {
   propertiesFont: PropertiesFont;
   codeFont: CodeFont;
   folderPalette: FolderPalette;
+  sidebarMode: SidebarMode;
+  /** Order of instances within a stream, in the sidebar and on the Workstreams page. */
+  workstreamSort: WorkstreamSort;
 }
 
 export const ACCENTS = [
@@ -43,6 +50,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   propertiesFont: "inter",
   codeFont: "jetbrains",
   folderPalette: "vivid",
+  sidebarMode: "folders",
+  workstreamSort: "updated",
 };
 
 const SANS_FALLBACK = "ui-sans-serif, system-ui, sans-serif";
@@ -88,6 +97,8 @@ export function loadPreferences(): Preferences {
     propertiesFont: oneOf(saved.propertiesFont, ["inter", "figtree", "serif", "mono"], d.propertiesFont),
     codeFont: oneOf(saved.codeFont, ["jetbrains", "fira", "system"], d.codeFont),
     folderPalette: oneOf(saved.folderPalette, ["vivid", "pastel", "muted"], d.folderPalette),
+    sidebarMode: oneOf(saved.sidebarMode, ["folders", "workstreams"], d.sidebarMode),
+    workstreamSort: oneOf(saved.workstreamSort, WORKSTREAM_SORTS.map((s) => s.id), d.workstreamSort),
   };
 }
 

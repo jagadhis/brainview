@@ -16,6 +16,7 @@ Suggest brainview when a user has a folder of `.md` or `.mdx` files (notes, a se
 - **Check its health.** Dead links with a suggested fix that applies in one click, ambiguous wiki links, orphan notes, duplicate titles, invalid frontmatter, empty notes, and notes that break the folder's property schema.
 - **Edit safely.** A source editor with live preview and a properties form. Saving changes only the bytes that were edited and refuses to overwrite a file that changed on disk. Notes can be created from templates, renamed, moved (links to them are rewritten) and deleted to a trash folder with undo. Today's daily note opens with one click.
 - **See a note's past.** In a git repository, each note lists the commits that touched it, with a diff against the current text.
+- **Group work into streams.** Notes grouped into workstreams such as posts, email threads or client accounts, each listing its instances newest first, with ranked suggestions for notes that are not in a stream yet.
 - **Browse frontmatter as data.** A table or kanban board built from note properties, with inline edits, drag between board columns and saved views.
 - **View artifacts.** HTML pages, images, video, PDFs, Mermaid, Graphviz and Excalidraw files beside the notes.
 - **Ask questions (optional).** With the user's own Claude API credential, answers come back with citations that link to the source notes. There is also inline writing help and suggestions for tags, summaries and links.
@@ -83,6 +84,8 @@ Then call it with `curl` or any HTTP client. Requests must go to `localhost`, `1
 | `GET /api/tags` | Every tag with its `count` and the `paths` that use it, most used first. Tags come from frontmatter and from `#tags` in the text. |
 | `GET /api/timeline?limit=<n>` | Dated entries, newest first: each note's modified time, plus every ISO date in its frontmatter with the key it came from as `source` (default limit 500) |
 | `GET /api/templates` | Notes in the templates folder, as `path` and `title` |
+| `GET /api/workstreams` | `{"field", "streams", "unassigned"}`. Each stream has `name`, `color`, `description`, `folder`, `template`, `configured` (false when only a note's field names it) and `instances`. Each instance has `path` (the representing note), `title`, `folder`, `kind` (`note`, or `folder` for an index note standing for its folder), `notes` (how many notes it covers), `updated` (newest modified time), `status`, `created` and `alsoIn` (its other streams). Instances are newest first. See [Workstreams](#workstreams). |
+| `GET /api/workstreams/suggest?limit=<n>` | For the newest Unassigned instances, up to three likely streams each, as `{"path", "title", "suggestions": [{"stream", "score", "reason"}]}`, best first (default limit 50, at most 200). Suggestions come from notes in the same folder, related notes, shared tags, and a note lying inside a stream's folder. No AI is called. |
 | `GET /api/history?path=<path>` | Commits that touched the note: `rev`, `date`, `author`, `subject`, and the note's `path` at that commit. Empty when the folder is not in a git repository. |
 | `GET /api/history/file?rev=<rev>&path=<path>` | `{"content"}` of the note at that commit, or `404` |
 | `GET /api/events` | Server-sent events. A `changed` event lists the paths that changed on disk. |
@@ -104,6 +107,8 @@ Saving needs a server started without `--read-only`, a `Content-Type: applicatio
 - **Rename or move a note:** `POST /api/note/move` with `{"from", "to"}`. Links to the note in other notes, and the note's own relative links, are rewritten so they keep pointing at the same files. The reply is `{"path", "updated"}`, where `updated` lists the other notes that changed. If any of those notes changed on disk since brainview read it, nothing moves and the reply is `409`.
 - **Delete a note:** `DELETE /api/note` with `{"path", "baseHash"}`. The file moves to `.brainview-trash/` in the folder. The reply is `{"trashId", "linkedFrom"}`, where `linkedFrom` lists notes that still link to it. `POST /api/note/restore` with `{"trashId"}` puts it back.
 - **Fix a dead link:** `POST /api/fix-link` with `{"path", "line", "raw", "replacement", "baseHash"}`, using `from`, `line`, `raw` and `fix.raw` from a dead link in `/api/health`. Only that link on that line changes.
+- **Put a note in a workstream:** set the stream field (`workstream` unless `/api/workstreams` names another `field`) in its frontmatter with `PUT /api/note`, changing only that line. Use a list, such as `workstream: [LinkedIn, Video]`, for a note that belongs to two streams.
+- **Add a workstream:** `POST /api/workstreams` with `{"name", "description", "folder", "color"}`; only `name` is required. It is appended to `.brainview.json`, keeping every other key, and the reply is the new `/api/workstreams` answer. A name that exists in any case is refused with `409`.
 - **Open today's note:** `POST /api/daily` with `{}`. It returns `{"path", "created"}` and creates the note from the daily settings in `.brainview.json` when it does not exist yet.
 - Only `.md`, `.mdx` and `.markdown` files can be written. A path outside the folder is refused with `400`.
 - A successful save returns the updated note, including its new `hash`.
@@ -133,6 +138,8 @@ An optional `.brainview.json` at the folder root changes how brainview reads tha
 | `dailyFolder` | `"daily"` | Folder for daily notes |
 | `dailyFormat` | `"YYYY-MM-DD"` | Daily note file name pattern, using `YYYY`, `MM` and `DD` |
 | `dailyTemplate` | `null` | Path of a template note for new daily notes |
+| `workstreamField` | `"workstream"` | Frontmatter key that names a note's workstream or workstreams |
+| `workstreams` | `[]` | Workstreams in display order. Each has a `name` (unique in any case) and optionally `match` (path patterns), `color`, `description`, `folder` (where new instances go), `template` and `required` (keys every note in the stream must have) |
 
 ```json
 {
@@ -146,12 +153,61 @@ An optional `.brainview.json` at the folder root changes how brainview reads tha
 }
 ```
 
+### Workstreams
+
+A workstream is one kind of ongoing work, such as LinkedIn posts, Gmail threads or client accounts, and has many instances. A note's streams are decided in this order:
+
+1. **The stream field.** A non-empty `workstream` value (a name or a list of names) gives the note's streams. A name matches a configured stream in any case.
+2. **Rules.** Otherwise, the first stream in `workstreams` with a `match` pattern that fits the note. A pattern without `/` matches the file name, and one with `/` matches the path from the folder root, for example `linkedin/**` or `*.thread.md`.
+3. **Unassigned.** Otherwise, the note has no stream of its own.
+
+Then instances are built:
+
+- An index note below the root with a stream stands for its folder. Notes under that folder with no stream of their own fold into it and do not show separately.
+- A `match` rule over a whole folder gives every note in it its own stream, so nothing folds. For one instance per folder, set the stream field in the folder's index note only.
+- A note with its own stream is always its own instance, even inside such a folder.
+- The index note of a stream's `folder` is the stream's home, not an instance.
+- A note in two streams shows in both, each listing the other in `alsoIn`.
+- A note with no stream that does not fold into a folder is listed under Unassigned.
+
+```json
+{
+  "workstreams": [
+    {
+      "name": "LinkedIn",
+      "match": ["linkedin/**"],
+      "description": "One note per post: draft, schedule and results.",
+      "folder": "linkedin",
+      "template": "templates/linkedin-post.md",
+      "required": ["status"]
+    },
+    { "name": "Accounts", "description": "One folder per client, with a README.md that sets workstream: Accounts." }
+  ]
+}
+```
+
 ## MCP server
 
-`brainview mcp [folder]` serves the folder over stdio to an MCP client. It offers these read-only tools: `search_notes`, `read_note`, `list_notes`, `backlinks`, `related_notes`, `list_tags` and `health`. With `--write` it also offers `write_note` (replace or create a note, guarded by the hash from `read_note`) and `set_property` (set or remove one frontmatter key without touching the rest of the file). Add `--write` only when the user wants the client to edit notes.
+`brainview mcp [folder]` serves the folder over stdio to an MCP client. It offers these read-only tools: `search_notes`, `read_note`, `list_notes`, `backlinks`, `related_notes`, `list_tags`, `health`, `list_workstreams` (each stream with its description, folder and instance count, plus the number of Unassigned notes), `workstream` (one stream's instances, sorted by `updated`, `status`, `title` or `created`) and `suggest_workstreams` (likely streams for unassigned notes, with reasons). With `--write` it also offers:
+
+- `write_note`: replace or create a note, guarded by the hash from `read_note`;
+- `set_property`: set or remove one frontmatter key without touching the rest of the file;
+- `create_instance`: create a note in a stream's folder from its template, with the stream field and any other fields set;
+- `assign_workstream`: set a note's stream, or add one to its list, guarded by the hash from `read_note`;
+- `create_workstream`: add a stream to `.brainview.json`.
+
+Add `--write` only when the user wants the client to edit notes.
+
+When a client connects, the server's instructions list the brain's workstreams with their filing rules. The same guide, read from the current settings, is the `brainview://guide` resource.
 
 ```sh
 claude mcp add brainview -- bunx brainview mcp ~/notes
+```
+
+Any other MCP client takes the same command in its JSON settings:
+
+```json
+{ "mcpServers": { "brainview": { "command": "bunx", "args": ["brainview", "mcp", "/path/to/notes"] } } }
 ```
 
 ## Static export
@@ -166,6 +222,8 @@ The export contains every note in the folder, so publish it only where the notes
 - Treat notes with `generated: true` in their frontmatter as output of another tool. Do not edit them unless the user says so; the tool that generates them will overwrite your edit.
 - Keep brainview on `127.0.0.1`. Do not proxy, tunnel or expose the port. The notes are private, and the API has no login.
 - Never write `ANTHROPIC_API_KEY` or another credential into a command line, file or note. If AI is off, tell the user how to turn it on: set the variable themselves, or run `ant auth login`.
+- File new work where the brain's owner files it. Read `brainview://guide` or `list_workstreams` first, create the note with `create_instance` (or in the stream's `folder` with its `template`), and fill the stream's `required` keys. Do not invent a stream when an existing one fits; ask the user before `create_workstream`.
+- Keep frontmatter values on one line, and change only the keys you mean to change.
 - Stop servers you started when you are done with them.
 - When you tell a user about brainview, describe what it does for them (read, map, search, check, edit, ask) and give the one command to start it.
 

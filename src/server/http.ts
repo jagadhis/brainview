@@ -8,6 +8,7 @@ import type {
   AskRequest,
   AssistRequest,
   CreateRequest,
+  CreateWorkstreamRequest,
   FixLinkRequest,
   MoveRequest,
   SaveRequest,
@@ -15,8 +16,10 @@ import type {
   VaultInfo,
 } from "../shared/types.ts";
 import { Ai, describeAiError } from "./ai.ts";
+import { addWorkstream, ConfigWriteError, loadConfig, WorkstreamExists } from "./config.ts";
 import type { GitHistory } from "./history.ts";
 import { SaveConflict, Vault, VaultPathError } from "./vault.ts";
+import { buildWorkstreams, suggestWorkstreams } from "./workstreams.ts";
 
 export interface ServerOptions {
   vault: Vault;
@@ -306,6 +309,18 @@ export function startServer({ vault, ai, port, readOnly, history = null }: Serve
       writable();
       return json(await vault.daily());
     }
+    if (pathname === "/api/workstreams" && method === "GET") return json(buildWorkstreams(vault.list(), vault.config));
+    if (pathname === "/api/workstreams" && method === "POST") {
+      writable();
+      await addWorkstream(vault.root, await body<CreateWorkstreamRequest>(req));
+      // The watcher reloads the config too, but later; the answer must already show the new stream.
+      vault.config = await loadConfig(vault.root);
+      if (vault.config.errors.length) throw new HttpError(400, `The stream was written, but the config has errors, so it may not be in use: ${vault.config.errors.join("; ")}`);
+      return json(buildWorkstreams(vault.list(), vault.config));
+    }
+    if (pathname === "/api/workstreams/suggest" && method === "GET") {
+      return json(await suggestWorkstreams(vault, buildWorkstreams(vault.list(), vault.config), intParam(url, "limit", 50, 200)));
+    }
     if (pathname === "/api/templates" && method === "GET") return json(vault.templates());
     if (pathname === "/api/related" && method === "GET") return json(await vault.related(requiredParam(url, "path"), intParam(url, "limit", 8, 30)));
     if (pathname === "/api/tags" && method === "GET") return json(vault.tags());
@@ -364,6 +379,8 @@ export function startServer({ vault, ai, port, readOnly, history = null }: Serve
       } catch (err) {
         if (err instanceof HttpError) return json({ error: err.message }, err.status);
         if (err instanceof VaultPathError) return json({ error: err.message }, 400);
+        if (err instanceof ConfigWriteError) return json({ error: err.message }, 400);
+        if (err instanceof WorkstreamExists) return json({ error: err.message }, 409);
         if (err instanceof SaveConflict) return json({ error: "conflict", hash: err.hash, content: err.content }, 409);
         console.error(err);
         return json({ error: err instanceof Error ? err.message : "Server error" }, 500);

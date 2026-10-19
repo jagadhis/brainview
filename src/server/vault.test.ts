@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { addWorkstream, ConfigWriteError, WorkstreamExists } from "./config.ts";
 import { SaveConflict, Vault, VaultPathError, contentHash } from "./vault.ts";
 
 let dir: string;
@@ -342,6 +343,69 @@ describe("health fixes and config", () => {
     const reopened = await Vault.open(join(dir, "brain"));
     expect(reopened.health().schemaIssues[0]).toMatchObject({ path: ".brainview.json" });
     reopened.close();
+  });
+
+  test("reports keys a note's workstream requires, whether the field or a rule puts it there, but not on the stream's home note", async () => {
+    await mkdir(join(dir, "brain", "linkedin"));
+    await writeFile(join(dir, "brain", "linkedin", "draft.md"), "---\ntitle: Draft\n---\n# Draft\n");
+    await writeFile(join(dir, "brain", "linkedin", "done.md"), "---\nstatus: posted\n---\n# Done\n");
+    await writeFile(join(dir, "brain", "linkedin", "bare.md"), "# Bare\n\nNo frontmatter yet.\n");
+    await writeFile(join(dir, "brain", "linkedin", "README.md"), "# LinkedIn\n\nHow we post.\n");
+    await writeFile(join(dir, "brain", "pitch.md"), "---\nworkstream: LinkedIn\n---\n# Pitch\n");
+    await writeFile(join(dir, "brain", ".brainview.json"), JSON.stringify({ workstreams: [{ name: "LinkedIn", match: ["linkedin/**"], folder: "linkedin", required: ["status"] }] }));
+    const reopened = await Vault.open(join(dir, "brain"));
+    expect(reopened.health().schemaIssues).toEqual([
+      { path: "linkedin/bare.md", key: "status", problem: "required for workstream LinkedIn" },
+      { path: "linkedin/draft.md", key: "status", problem: "required for workstream LinkedIn" },
+      { path: "pitch.md", key: "status", problem: "required for workstream LinkedIn" },
+    ]);
+    reopened.close();
+  });
+
+  test("keeps the first of two workstreams with the same name and reports the second", async () => {
+    await writeFile(join(dir, "brain", ".brainview.json"), JSON.stringify({ workstreamField: "area", workstreams: [{ name: "Gmail", color: "red" }, { name: "gmail" }] }));
+    const reopened = await Vault.open(join(dir, "brain"));
+    expect(reopened.config.workstreamField).toBe("area");
+    expect(reopened.config.workstreams).toEqual([{ name: "Gmail", color: "red" }]);
+    expect(reopened.health().schemaIssues).toEqual([{ path: ".brainview.json", key: "", problem: '.brainview.json workstreams: "gmail" is listed twice; the first one is used' }]);
+    reopened.close();
+  });
+
+  test("adds a workstream to the config file, keeping every other key, and refuses a name that exists in any case", async () => {
+    const file = join(dir, "brain", ".brainview.json");
+    await writeFile(file, JSON.stringify({ indexNames: ["current"], custom: { kept: true }, workstreams: [{ name: "LinkedIn" }] }));
+
+    await addWorkstream(join(dir, "brain"), { name: " Gmail ", description: "One note per thread.", folder: "mail/" });
+
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
+      indexNames: ["current"],
+      custom: { kept: true },
+      workstreams: [{ name: "LinkedIn" }, { name: "Gmail", description: "One note per thread.", folder: "mail" }],
+    });
+    expect(await readFile(file, "utf8")).toEndWith("]\n}\n");
+    await expect(addWorkstream(join(dir, "brain"), { name: "gmail" })).rejects.toBeInstanceOf(WorkstreamExists);
+    expect(JSON.parse(await readFile(file, "utf8")).workstreams).toHaveLength(2);
+  });
+
+  test("creates the config file for the first workstream", async () => {
+    await addWorkstream(join(dir, "brain"), { name: "Accounts" });
+    expect(await readFile(join(dir, "brain", ".brainview.json"), "utf8")).toBe('{\n  "workstreams": [\n    {\n      "name": "Accounts"\n    }\n  ]\n}\n');
+  });
+
+  test("refuses a bad workstream or a broken config file and leaves the file as it was", async () => {
+    const file = join(dir, "brain", ".brainview.json");
+    await writeFile(file, "{ not json");
+    await expect(addWorkstream(join(dir, "brain"), { name: "Gmail" })).rejects.toThrow("not valid JSON");
+    expect(await readFile(file, "utf8")).toBe("{ not json");
+
+    await writeFile(file, "{}");
+    await expect(addWorkstream(join(dir, "brain"), { name: "" })).rejects.toBeInstanceOf(ConfigWriteError);
+    await expect(addWorkstream(join(dir, "brain"), { name: "Two\nlines" })).rejects.toBeInstanceOf(ConfigWriteError);
+    await expect(addWorkstream(join(dir, "brain"), { name: "x".repeat(81) })).rejects.toBeInstanceOf(ConfigWriteError);
+    await expect(addWorkstream(join(dir, "brain"), { name: "Gmail", folder: "../outside" })).rejects.toBeInstanceOf(ConfigWriteError);
+    await expect(addWorkstream(join(dir, "brain"), { name: "Gmail", folder: "/etc" })).rejects.toBeInstanceOf(ConfigWriteError);
+    await expect(addWorkstream(join(dir, "brain"), { name: "Gmail", folder: ".hidden" })).rejects.toBeInstanceOf(ConfigWriteError);
+    expect(await readFile(file, "utf8")).toBe("{}");
   });
 });
 

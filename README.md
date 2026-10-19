@@ -29,6 +29,7 @@ Nothing is uploaded or hosted. brainview reads the folder, keeps an index in mem
   - Overview: a folder map, the most-linked notes, recently changed and stale notes, and the frontmatter fields in use.
   - Graph: an interactive link graph coloured by folder, subfolder or a property, with search, grouping by folder, a time slider, and a local graph around any note.
   - Tables and boards: a table or kanban board built from frontmatter, for any folder. Filter by a field value, save views, edit cells in place, and drag cards between columns.
+  - Workstreams: notes grouped into the streams of work they belong to, such as LinkedIn posts, email threads or client accounts, each listing its instances newest first. The sidebar can show the brain by folder or by workstream. Drag an instance to another stream, add a stream, or sort the unassigned notes into streams from ranked suggestions. See [Workstreams](#workstreams).
   - Tags and Timeline: every tag with its notes, and notes by modified date and by the dates in their frontmatter.
   - Health: dead links with a one-click fix when one is likely, ambiguous wiki links, orphan notes, notes reached only through a folder's index note, duplicate titles, invalid frontmatter, empty notes, and properties that break the folder's schema.
 - **Search.** `⌘K` searches titles, headings, frontmatter and text, with fuzzy and prefix matching.
@@ -65,9 +66,40 @@ Hidden files and folders (names starting with a dot), `node_modules`, `dist`, `b
 
 Put a `.brainview.json` at the folder root to declare property kinds (an enum with badge colours, steps, date, list, number, boolean or link), required properties per frontmatter `type`, which file names act as a folder's index note, and the templates and daily-note folders. Every key is optional. [AGENTS.md](AGENTS.md#folder-settings-brainviewjson) lists them with an example.
 
+## Workstreams
+
+A workstream is one kind of ongoing work in the brain, such as LinkedIn posts, Gmail threads, client accounts or videos. Each has many instances: a post, a thread, an account. brainview decides a note's stream in this order:
+
+1. The `workstream` frontmatter field, which can hold one name or a list. A list puts the note in each stream, marked as shared.
+2. Otherwise, the first stream in `.brainview.json` whose `match` pattern fits the note's path.
+3. Otherwise, the note is Unassigned.
+
+A folder's index note (such as `acme/README.md`) with a stream stands for the whole folder: the notes in it that have no stream of their own count toward that one instance. The index note of a stream's own `folder` is the stream's home page, not an instance.
+
+A `match` pattern over a whole folder (such as `accounts/**`) gives every note in it a stream of its own, so each one is its own instance and nothing folds. To make one instance per folder, put the `workstream` field in the folder's index note instead, and leave the other notes without it.
+
+```json
+{
+  "workstreams": [
+    {
+      "name": "LinkedIn",
+      "match": ["linkedin/**"],
+      "color": "blue",
+      "description": "One note per post: draft, schedule and results.",
+      "folder": "linkedin",
+      "template": "templates/linkedin-post.md",
+      "required": ["status"]
+    },
+    { "name": "Accounts", "description": "One folder per client, with a README.md naming the stream." }
+  ]
+}
+```
+
+Only `name` is required. `description`, `folder`, `template` and `required` are the stream's filing rules: the app shows them, the MCP server hands them to agents, and Health lists notes in the stream that miss a `required` key. A brain with no workstream settings works as before, with every note under Unassigned. Set `workstreamField` to read a different frontmatter key.
+
 ## MCP server
 
-`brainview mcp ~/notes` serves the folder to an MCP client such as Claude Code or Claude Desktop over stdio. The client can search notes, read them with their links and backlinks, list notes, tags and related notes, and run the health check. With `--write` it can also save notes and set single properties, with the same conflict check as the editor.
+`brainview mcp ~/notes` serves the folder to an MCP client such as Claude Code or Claude Desktop over stdio. The client can search notes, read them with their links and backlinks, list notes, tags and related notes, list workstreams and their instances, get stream suggestions for unassigned notes, and run the health check. The server tells the client the brain's workstreams and filing rules when it connects, and the same guide is the `brainview://guide` resource. With `--write` it can also save notes, set single properties, create a note in a stream from the stream's template, move a note to another stream and add a stream, with the same conflict check as the editor.
 
 ```sh
 claude mcp add brainview -- bunx brainview mcp ~/notes

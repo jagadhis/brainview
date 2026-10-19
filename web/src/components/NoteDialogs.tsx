@@ -3,15 +3,17 @@ import { CircleAlert, TriangleAlert, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { basename, dirname, isNotePath, stripExtension } from "../../../src/shared/paths.ts";
+import { streamValues } from "../../../src/shared/workstreams.ts";
 import { api, isConflict } from "../lib/api.ts";
-import { keys, useNote, useTemplates } from "../lib/queries.ts";
+import { keys, useInfo, useNote, useTemplates, useWorkstreams } from "../lib/queries.ts";
 import { noteHref } from "../lib/routes.ts";
 import { useToast } from "../lib/toast.tsx";
 import { useUi } from "../lib/ui-state.tsx";
-import { useCanWrite, useCurrentNotePath } from "./NoteActions.tsx";
+import { useCanWrite, useCurrentNotePath, withStream } from "./NoteActions.tsx";
+import { canEditField, confirmGenerated, useFieldSave } from "./TableCells.tsx";
 import { Button, Spinner } from "./ui.tsx";
 
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
+export const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** Moving, deleting or restoring opens another page, which drops the editor's unsaved text; ask first. */
 function useDiscardOk(): () => boolean {
@@ -19,7 +21,7 @@ function useDiscardOk(): () => boolean {
   return () => !editorDirty || window.confirm("The editor has unsaved changes, which this will discard. Continue?");
 }
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
-const fieldClass = "h-8 w-full rounded-lg border border-line-strong bg-surface px-2.5 text-[13px] text-ink outline-none focus:ring-1 focus:ring-accent/50";
+export const fieldClass = "h-8 w-full rounded-lg border border-line-strong bg-surface px-2.5 text-[13px] text-ink outline-none focus:ring-1 focus:ring-accent/50";
 
 /** The file a new note goes to: the typed path, or a file named after the title when only a folder is given. */
 function newNotePath(path: string, title: string): string | null {
@@ -53,13 +55,14 @@ export function NoteDialogs() {
     <>
       {noteDialog?.kind === "new" && <NewNoteDialog onClose={close} />}
       {noteDialog?.kind === "move" && <MoveNoteDialog key={noteDialog.path} path={noteDialog.path} onClose={close} />}
+      {noteDialog?.kind === "workstream" && <WorkstreamDialog key={noteDialog.path} path={noteDialog.path} onClose={close} />}
       {noteDialog?.kind === "delete" && <DeleteNoteDialog key={noteDialog.path} path={noteDialog.path} onClose={close} onDeleted={setDeleted} />}
       {deleted && <UndoDelete key={deleted.trashId} deleted={deleted} onDone={dismissUndo} />}
     </>
   );
 }
 
-function Dialog({ title, onClose, onSubmit, children, actions }: { title: string; onClose: () => void; onSubmit: () => void; children: ReactNode; actions: ReactNode }) {
+export function Dialog({ title, onClose, onSubmit, children, actions }: { title: string; onClose: () => void; onSubmit: () => void; children: ReactNode; actions: ReactNode }) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     onSubmit();
@@ -88,7 +91,7 @@ function Dialog({ title, onClose, onSubmit, children, actions }: { title: string
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block">
       <span className="mb-1 block text-[12px] font-medium text-ink-soft">{label}</span>
@@ -98,7 +101,7 @@ function Field({ label, hint, children }: { label: string; hint?: ReactNode; chi
   );
 }
 
-function ErrorLine({ error }: { error: string | null }) {
+export function ErrorLine({ error }: { error: string | null }) {
   if (!error) return null;
   return (
     <p role="alert" className="flex items-start gap-1.5 text-[12.5px] text-red-600 dark:text-red-400">
@@ -224,6 +227,91 @@ function MoveNoteDialog({ path, onClose }: { path: string; onClose: () => void }
       <Field label="Path" hint="Links to this note in other notes are updated to the new path.">
         <input ref={input} value={to} onChange={(e) => setTo(e.target.value)} spellCheck={false} className={`${fieldClass} font-mono !text-[12.5px]`} />
       </Field>
+      <ErrorLine error={error} />
+    </Dialog>
+  );
+}
+
+/** Sets the note's stream field. It writes only that key, and nothing when the field changed on disk since the dialog read it. */
+function WorkstreamDialog({ path, onClose }: { path: string; onClose: () => void }) {
+  const { data: note } = useNote(path);
+  const { data: info } = useInfo();
+  const { data: workstreams, error: streamsError } = useWorkstreams();
+  const saveField = useFieldSave();
+  const [choice, setChoice] = useState("");
+  const [typed, setTyped] = useState("");
+  const [mode, setMode] = useState<"replace" | "add">("replace");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const field = workstreams?.field ?? info?.config.workstreamField ?? "workstream";
+  const own = note ? streamValues(note.frontmatter, field) : [];
+  // With no field, a rule may still place the note; adding keeps that stream once the field takes over.
+  const resolved = (workstreams?.streams ?? []).filter((s) => s.instances.some((i) => i.path === path)).map((s) => s.name);
+  const current = own.length ? own : resolved;
+  const target = typed.trim() || choice;
+  const unchanged = !target || (mode === "replace" ? current.length === 1 && current[0] === target : current.includes(target));
+
+  const assign = async () => {
+    if (!note || unchanged) return;
+    if (!canEditField(note, field)) return setError(note.frontmatterError ? "The note's frontmatter is not valid YAML, so it cannot be changed here." : `${field} cannot be set here.`);
+    if (!confirmGenerated(note)) return;
+    setBusy(true);
+    setError(null);
+    const opened = note.frontmatter?.[field];
+    const value = mode === "replace" || !current.length ? target : withStream(own.length ? opened : resolved, target);
+    if (await saveField(note, field, value, opened)) onClose();
+    else setBusy(false);
+  };
+
+  return (
+    <Dialog
+      title="Move to workstream"
+      onClose={onClose}
+      onSubmit={() => void assign()}
+      actions={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" disabled={busy || !note || unchanged}>
+            {busy && <Spinner />} {mode === "add" && current.length ? "Add" : "Move"}
+          </Button>
+        </>
+      }
+    >
+      {!note ? (
+        <Spinner className="text-ink-faint" />
+      ) : (
+        <>
+          <p className="text-[13px] text-ink-soft">
+            <span className="font-semibold text-ink">{note.title}</span>{" "}
+            {current.length ? <>is in {current.join(", ")}{!own.length && " by a rule"}.</> : "is not in a workstream."}
+          </p>
+          <Field label="Stream" hint={streamsError ? `The stream list could not be loaded: ${message(streamsError)}` : undefined}>
+            <select autoFocus value={choice} onChange={(e) => setChoice(e.target.value)} disabled={Boolean(typed.trim())} className={fieldClass}>
+              <option value="">Choose a stream</option>
+              {workstreams?.streams.map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Or a new stream" hint={`Sets ${field} in the note's frontmatter; the file stays where it is.`}>
+            <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Stream name" className={fieldClass} />
+          </Field>
+          {current.length > 0 && (
+            <div role="radiogroup" aria-label="How to file it" className="flex gap-4 text-[13px] text-ink-soft">
+              {(["replace", "add"] as const).map((m) => (
+                <label key={m} className="flex items-center gap-1.5">
+                  <input type="radio" name="stream-mode" checked={mode === m} onChange={() => setMode(m)} />
+                  {m === "replace" ? "Replace its streams" : "Add to its streams"}
+                </label>
+              ))}
+            </div>
+          )}
+        </>
+      )}
       <ErrorLine error={error} />
     </Dialog>
   );

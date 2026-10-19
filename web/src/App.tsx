@@ -18,6 +18,7 @@ const TablePage = lazy(() => import("./pages/TablePage.tsx").then((m) => ({ defa
 const HealthPage = lazy(() => import("./pages/HealthPage.tsx").then((m) => ({ default: m.HealthPage })));
 const TagsPage = lazy(() => import("./pages/TagsPage.tsx").then((m) => ({ default: m.TagsPage })));
 const TimelinePage = lazy(() => import("./pages/TimelinePage.tsx").then((m) => ({ default: m.TimelinePage })));
+const WorkstreamsPage = lazy(() => import("./pages/WorkstreamsPage.tsx").then((m) => ({ default: m.WorkstreamsPage })));
 
 export function App() {
   const { setPaletteOpen, paletteOpen, askOpen, setAskOpen, dark, toggleDark, setSettingsOpen, sidebarOpen, setSidebarOpen } = useUi();
@@ -84,6 +85,7 @@ export function App() {
               <Route path="/tags">{() => <TagsPage />}</Route>
               <Route path="/tags/*">{(params) => <TagsPage routeTag={params["*"]} />}</Route>
               <Route path="/timeline" component={TimelinePage} />
+              <Route path="/workstreams" component={WorkstreamsPage} />
               <Route path="/artifact/*">{(params) => <ArtifactPage routePath={params["*"]} />}</Route>
               <Route path="/note/*">{(params) => <NotePage routePath={params["*"]} onAsk={ask} />}</Route>
               <Route>

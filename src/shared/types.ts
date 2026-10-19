@@ -212,8 +212,80 @@ export interface BrainConfig {
   /** Daily note name pattern with YYYY, MM and DD. */
   dailyFormat: string;
   dailyTemplate: string | null;
+  /** Frontmatter key that names a note's workstream or workstreams. */
+  workstreamField: string;
+  /** Configured workstreams, in display order. Names found only in the field are added after these. */
+  workstreams: WorkstreamConfig[];
   /** Problems reading the config file, shown in Health. */
   errors: string[];
+}
+
+/** One workstream in `.brainview.json`. Only `name` is required. */
+export interface WorkstreamConfig {
+  name: string;
+  /** Globs that assign notes with no stream field. Without a `/` a pattern matches the file name, with one the path. */
+  match?: string[];
+  /** A CSS colour or a preset name, as for enum fields. */
+  color?: string;
+  /** What belongs in the stream, written for people and agents. */
+  description?: string;
+  /** Where new instances go. Its index note is the stream's home, not an instance. */
+  folder?: string;
+  /** Path of a template note for new instances. */
+  template?: string;
+  /** Frontmatter keys every note in the stream must have; missing ones show in Health. */
+  required?: string[];
+}
+
+/** One item of work: a note, or a folder represented by its index note together with the notes folded into it. */
+export interface WorkstreamInstance {
+  /** The representing note. */
+  path: string;
+  title: string;
+  folder: string;
+  kind: "note" | "folder";
+  /** Notes in the instance, the representing note included. */
+  notes: number;
+  /** Newest modified time of any note in the instance. */
+  updated: number;
+  /** Frontmatter `status`, else `stage`, of the representing note. */
+  status: string | null;
+  /** Frontmatter `created`, else `date`, as epoch milliseconds. */
+  created: number | null;
+  /** The note's other streams, when it is in more than one. */
+  alsoIn: string[];
+}
+
+export interface Workstream {
+  name: string;
+  color: string | null;
+  description: string | null;
+  folder: string | null;
+  template: string | null;
+  /** False for a stream that exists only because a note names it. */
+  configured: boolean;
+  instances: WorkstreamInstance[];
+}
+
+export interface WorkstreamsResponse {
+  field: string;
+  streams: Workstream[];
+  unassigned: WorkstreamInstance[];
+}
+
+export type WorkstreamSort = "updated" | "status" | "title" | "created";
+
+export interface StreamSuggestion {
+  path: string;
+  title: string;
+  suggestions: { stream: string; score: number; reason: string }[];
+}
+
+export interface CreateWorkstreamRequest {
+  name: string;
+  description?: string;
+  folder?: string;
+  color?: string;
 }
 
 export interface VaultInfo {

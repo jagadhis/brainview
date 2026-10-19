@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CalendarDays, CornerDownLeft, FilePlus2, FileText, FolderInput, HeartPulse, LayoutDashboard, Moon, Network, Search, Settings, Sparkles, Table2, Trash2, type LucideIcon } from "lucide-react";
+import { CalendarDays, CornerDownLeft, FilePlus2, FileText, FolderInput, HeartPulse, Layers, LayoutDashboard, Moon, Network, Search, Settings, Sparkles, Table2, Trash2, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { api } from "../lib/api.ts";
@@ -64,6 +64,7 @@ export function CommandPalette({ onAsk }: { onAsk: (question: string) => void })
       { id: "c:overview", icon: LayoutDashboard, title: "Go to Overview", run: () => go("/") },
       { id: "c:graph", icon: Network, title: "Open the graph", run: () => go("/graph") },
       { id: "c:table", icon: Table2, title: "Open tables and boards", run: () => go("/table") },
+      { id: "c:workstreams", icon: Layers, title: "Workstreams", run: () => go("/workstreams") },
       { id: "c:health", icon: HeartPulse, title: "Check brain health", run: () => go("/health") },
       { id: "c:theme", icon: Moon, title: "Toggle dark mode", run: () => (toggleDark(), close()) },
       { id: "c:settings", icon: Settings, title: "Open settings", run: () => (close(), setSettingsOpen(true)) },
@@ -76,6 +77,7 @@ export function CommandPalette({ onAsk }: { onAsk: (question: string) => void })
       if (openNote && notes.has(openNote)) {
         commands.push(
           { id: "c:move", icon: FolderInput, title: "Rename or move note", detail: openNote, run: () => (close(), setNoteDialog({ kind: "move", path: openNote })) },
+          { id: "c:workstream", icon: Layers, title: "Move to workstream", detail: openNote, run: () => (close(), setNoteDialog({ kind: "workstream", path: openNote })) },
           { id: "c:delete", icon: Trash2, title: "Delete note", detail: openNote, run: () => (close(), setNoteDialog({ kind: "delete", path: openNote })) },
         );
       }

@@ -162,14 +162,15 @@ export const confirmGenerated = (note: NoteSummary): boolean =>
 class FieldChanged extends Error {}
 
 // Saves to one note run one after another, so a second quick edit reads the content the first one wrote.
-const saving = new Map<string, Promise<void>>();
+const saving = new Map<string, Promise<boolean>>();
 
 /**
  * Sets one frontmatter key against the note's current content and hash, so a concurrent edit is reported, never
  * overwritten. `opened` is the value the user saw when the edit began; if the file now holds another value for the key,
  * nothing is written. The table cache shows the new value at once and is refetched if the save fails.
  */
-export function useFieldSave(): (note: NoteSummary, key: string, value: unknown, opened: unknown) => Promise<void> {
+/** Writes one frontmatter key in the background; resolves to whether it was written, and reports a failure itself. */
+export function useFieldSave(): (note: NoteSummary, key: string, value: unknown, opened: unknown) => Promise<boolean> {
   const client = useQueryClient();
   const toast = useToast();
   return (note, key, value, opened) => {
@@ -184,6 +185,7 @@ export function useFieldSave(): (note: NoteSummary, key: string, value: unknown,
         if (JSON.stringify(fresh.frontmatter?.[key] ?? null) !== JSON.stringify(opened ?? null)) throw new FieldChanged();
         const content = setFrontmatterField(fresh.content, key, value);
         if (content !== fresh.content) await api.save(note.path, content, fresh.hash);
+        return true;
       } catch (err) {
         void client.invalidateQueries({ queryKey: keys.table });
         toast(
@@ -196,6 +198,7 @@ export function useFieldSave(): (note: NoteSummary, key: string, value: unknown,
                 : String(err),
           "error",
         );
+        return false;
       }
     };
     const queued = (saving.get(note.path) ?? Promise.resolve()).then(run);

@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Ai } from "./ai.ts";
+import { loadConfig } from "./config.ts";
 import { startServer } from "./http.ts";
 import { Vault } from "./vault.ts";
 
@@ -165,11 +167,13 @@ describe("note operations over HTTP", () => {
       send("POST", "/api/note/restore", { trashId: "x" }, at),
       send("POST", "/api/fix-link", { path: "note.md", line: 1, raw: "a", replacement: "b", baseHash: hash }, at),
       send("POST", "/api/daily", {}, at),
+      send("POST", "/api/workstreams", { name: "Gmail" }, at),
     ]).then((responses) => responses.map((r) => r.status));
     readOnly.stop(true);
-    expect(statuses).toEqual([403, 403, 403, 403, 403, 403]);
+    expect(statuses).toEqual([403, 403, 403, 403, 403, 403, 403]);
     expect(vault.get("note.md")).not.toBeNull();
     expect(vault.get("new.md")).toBeNull();
+    expect(existsSync(join(dir, "brain", ".brainview.json"))).toBe(false);
   });
 
   test("moves a note and deletes it into the trash", async () => {
@@ -202,5 +206,67 @@ describe("note operations over HTTP", () => {
     big.close();
     expect(encoding).toBe("gzip");
     expect(JSON.parse(new TextDecoder().decode(Bun.gunzipSync(raw))).length).toBeGreaterThan(300);
+  });
+});
+
+describe("workstreams over HTTP", () => {
+  const post = (body: unknown) => fetch(`${base}/api/workstreams`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  test("lists a note's stream from its field", async () => {
+    await writeFile(join(dir, "brain", "thread.md"), "---\nworkstream: Gmail\n---\n# Thread\n");
+    const fresh = await Vault.open(join(dir, "brain"));
+    const freshServer = startServer({ vault: fresh, ai: new Ai(fresh, "claude-opus-5-5", false), port: 0, readOnly: true });
+
+    const res = await fetch(`http://127.0.0.1:${freshServer.port}/api/workstreams`);
+    const body = await res.json();
+    freshServer.stop(true);
+    fresh.close();
+
+    expect(body.field).toBe("workstream");
+    expect(body.streams).toMatchObject([{ name: "Gmail", configured: false, instances: [{ path: "thread.md", kind: "note" }] }]);
+  });
+
+  test("adds a stream to the config file and answers with it already listed", async () => {
+    const res = await post({ name: "LinkedIn", description: "One note per post.", folder: "linkedin" });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).streams).toContainEqual({ name: "LinkedIn", color: null, description: "One note per post.", folder: "linkedin", template: null, configured: true, instances: [] });
+    expect(JSON.parse(await readFile(join(dir, "brain", ".brainview.json"), "utf8")).workstreams).toEqual([{ name: "LinkedIn", description: "One note per post.", folder: "linkedin" }]);
+  });
+
+  test("answers 409 for a stream name that exists and 400 for an invalid one", async () => {
+    const duplicate = await post({ name: "linkedin" });
+    expect(duplicate.status).toBe(409);
+    expect((await duplicate.json()).error).toContain("already exists");
+
+    expect((await post({ name: "Bad", folder: "../outside" })).status).toBe(400);
+    expect(JSON.parse(await readFile(join(dir, "brain", ".brainview.json"), "utf8")).workstreams).toHaveLength(1);
+  });
+
+  test("answers 400 when the config has errors after the stream was written", async () => {
+    const file = join(dir, "brain", ".brainview.json");
+    const original = await readFile(file, "utf8");
+    await writeFile(file, JSON.stringify({ ...JSON.parse(original), indexNames: "readme" }));
+
+    const res = await post({ name: "Podcast" });
+    await writeFile(file, original);
+    vault.config = await loadConfig(join(dir, "brain"));
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("The stream was written");
+  });
+
+  test("suggests streams for the newest Unassigned notes, at most the asked-for number", async () => {
+    const create = (path: string, content: string) => fetch(`${base}/api/note`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, content }) });
+    await create("mail/acme.md", "---\nworkstream: Gmail\n---\n# Acme\n");
+    await create("mail/globex.md", "---\nworkstream: Gmail\n---\n# Globex\n");
+    await create("mail/initech.md", "# Initech\n");
+
+    const res = await fetch(`${base}/api/workstreams/suggest?limit=1`);
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveLength(1);
+    expect(body[0]).toMatchObject({ path: "mail/initech.md", suggestions: [{ stream: "Gmail", reason: "2 notes in the same folder are in Gmail" }] });
   });
 });

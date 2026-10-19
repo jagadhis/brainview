@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { applyPreferences, loadPreferences, savePreferences, type Preferences } from "./preferences.ts";
 
-/** A dialog that writes notes. `new` takes its folder from the note that is open. */
-export type NoteDialog = { kind: "new" } | { kind: "move" | "delete"; path: string };
+/** A dialog that writes notes. `new` takes its folder from the note that is open; `workstream` sets the note's stream field. */
+export type NoteDialog = { kind: "new" } | { kind: "move" | "delete" | "workstream"; path: string };
 
 interface UiState {
   askOpen: boolean;
