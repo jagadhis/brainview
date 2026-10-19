@@ -1,6 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { applyPreferences, loadPreferences, savePreferences, type Preferences } from "./preferences.ts";
 
+/** A dialog that writes notes. `new` takes its folder from the note that is open. */
+export type NoteDialog = { kind: "new" } | { kind: "move" | "delete"; path: string };
+
 interface UiState {
   askOpen: boolean;
   setAskOpen: (open: boolean) => void;
@@ -14,6 +17,11 @@ interface UiState {
   toggleDark: () => void;
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
+  noteDialog: NoteDialog | null;
+  setNoteDialog: (dialog: NoteDialog | null) => void;
+  /** The open editor has unsaved changes, which navigating away would discard. */
+  editorDirty: boolean;
+  setEditorDirty: (dirty: boolean) => void;
 }
 
 const Ctx = createContext<UiState | null>(null);
@@ -25,6 +33,8 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 900);
+  const [noteDialog, setNoteDialog] = useState<NoteDialog | null>(null);
+  const [editorDirty, setEditorDirty] = useState(false);
   const [preferences, setPreferences] = useState(loadPreferences);
   const [systemDark, setSystemDark] = useState(() => systemDarkQuery().matches);
   const dark = preferences.mode === "system" ? systemDark : preferences.mode === "dark";
@@ -49,8 +59,8 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const toggleDark = useCallback(() => updatePreferences({ mode: dark ? "light" : "dark" }), [dark, updatePreferences]);
 
   const value = useMemo(
-    () => ({ askOpen, setAskOpen, paletteOpen, setPaletteOpen, settingsOpen, setSettingsOpen, preferences, updatePreferences, dark, toggleDark, sidebarOpen, setSidebarOpen }),
-    [askOpen, paletteOpen, settingsOpen, preferences, updatePreferences, dark, toggleDark, sidebarOpen],
+    () => ({ askOpen, setAskOpen, paletteOpen, setPaletteOpen, settingsOpen, setSettingsOpen, preferences, updatePreferences, dark, toggleDark, sidebarOpen, setSidebarOpen, noteDialog, setNoteDialog, editorDirty, setEditorDirty }),
+    [askOpen, paletteOpen, settingsOpen, preferences, updatePreferences, dark, toggleDark, sidebarOpen, noteDialog, editorDirty],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

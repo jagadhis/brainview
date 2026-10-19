@@ -19,10 +19,47 @@ export interface LinkTargetIndex {
 export interface ResolvedLink {
   status: LinkStatus;
   target: string | null;
+  /** Other notes a wiki link could also mean, when its name matched more than one. */
+  alternatives?: string[];
+}
+
+/**
+ * The lookup tables behind wiki-link resolution, built the same way in the server and the editor preview so both pick the
+ * same note. Paths are sorted first, so the note a shared title or file name resolves to does not depend on scan order.
+ */
+export function buildLinkIndex(notes: Iterable<{ path: string; title: string }>, fileExists: (path: string) => boolean): LinkTargetIndex {
+  const sorted = [...notes].sort((a, b) => a.path.localeCompare(b.path));
+  const paths = new Set(sorted.map((n) => n.path));
+  const byBasename = new Map<string, string[]>();
+  const byTitle = new Map<string, string>();
+  for (const note of sorted) {
+    const key = stripExtension(basename(note.path)).toLowerCase();
+    byBasename.set(key, [...(byBasename.get(key) ?? []), note.path]);
+    const title = note.title.toLowerCase();
+    if (!byTitle.has(title)) byTitle.set(title, note.path);
+  }
+  return {
+    hasNote: (p) => paths.has(p),
+    notesByBasename: (name) => byBasename.get(name) ?? [],
+    noteByTitle: (title) => byTitle.get(title),
+    fileExists,
+  };
+}
+
+/** Orders notes that share a wiki-link name: the linking note's own folder first, then the nearest folder, then the shortest path. */
+function rankByProximity(fromPath: string, candidates: string[]): string[] {
+  const fromParts = dirname(fromPath).split("/");
+  const shared = (path: string) => {
+    const parts = dirname(path).split("/");
+    let n = 0;
+    while (n < parts.length && n < fromParts.length && parts[n] === fromParts[n]) n++;
+    return n;
+  };
+  return [...candidates].sort((a, b) => shared(b) - shared(a) || a.split("/").length - b.split("/").length || a.localeCompare(b));
 }
 
 // No part of a link spans a `[`, so a failed match stops at the next `[` instead of rescanning the rest of a long line.
-const MARKDOWN_LINK = /(!?)\[((?:[^[\]\\]|\\.)*)\]\(\s*<?([^[)\s>]+)>?(?:\s+["'(][^[)]*["')])?\s*\)/g;
+const MARKDOWN_LINK = /(!?)\[((?:[^[\]\\]|\\.)*)\]\(\s*(?:<([^<>\n[]+)>|([^[)\s<>]+))(?:\s+["'(][^[)]*["')])?\s*\)/g;
 const REFERENCE_DEFINITION = /^\s{0,3}\[([^\]]+)\]:\s*<?(\S+?)>?(?:\s+.*)?$/;
 const WIKI_LINK = /\[\[([^[\]|#]+)(?:#[^[\]|]*)?(?:\|([^[\]]+))?\]\]/g;
 const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
@@ -50,7 +87,7 @@ export function extractLinks(source: string): RawLink[] {
     const text = line.replace(/`+[^`]*`+/g, (m) => " ".repeat(m.length));
     for (const m of text.matchAll(MARKDOWN_LINK)) {
       if (m[1] === "!") continue;
-      const href = m[3]!;
+      const href = (m[3] ?? m[4])!;
       if (isExternalHref(href)) continue;
       links.push({ raw: href, text: m[2]!, line: i + 1, kind: "markdown" });
     }
@@ -107,11 +144,10 @@ function resolveWikiLink(fromPath: string, name: string, index: LinkTargetIndex)
       if (index.hasNote(candidate)) return { status: "note", target: candidate };
     }
   }
-  const byName = index.notesByBasename(stripExtension(basename(clean)).toLowerCase());
   const suffix = `/${clean.toLowerCase()}`;
-  const match =
-    byName.find((p) => stripExtension(p).toLowerCase().endsWith(suffix)) ??
-    (clean.includes("/") ? undefined : byName[0]) ??
-    index.noteByTitle(name.toLowerCase());
-  return match ? { status: "note", target: match } : { status: "dead", target: null };
+  const byName = index.notesByBasename(stripExtension(basename(clean)).toLowerCase());
+  const matches = rankByProximity(fromPath, clean.includes("/") ? byName.filter((p) => stripExtension(p).toLowerCase().endsWith(suffix)) : byName);
+  if (matches.length > 0) return matches.length > 1 ? { status: "note", target: matches[0]!, alternatives: matches.slice(1) } : { status: "note", target: matches[0]! };
+  const byTitle = index.noteByTitle(name.toLowerCase());
+  return byTitle ? { status: "note", target: byTitle } : { status: "dead", target: null };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractLinks, resolveLink, type LinkTargetIndex } from "./links.ts";
+import { buildLinkIndex, extractLinks, resolveLink, type LinkTargetIndex } from "./links.ts";
 import { relativePath } from "./paths.ts";
 
 const notes = ["README.md", "items/a/current.md", "items/b/current.md", "brain/notes/pricing.md", "guide/index.md"];
@@ -27,6 +27,30 @@ describe("extractLinks", () => {
       { raw: "pricing", text: "the pricing note", line: 1, kind: "wiki" },
       { raw: "../b/current.md", text: "ref", line: 7, kind: "markdown" },
     ]);
+  });
+});
+
+describe("extractLinks with angle brackets", () => {
+  test("reads a destination with spaces written in angle brackets", () => {
+    expect(extractLinks("See [the review](<../PR review/2026-10-15 notes.md>).")).toEqual([
+      { raw: "../PR review/2026-10-15 notes.md", text: "the review", line: 1, kind: "markdown" },
+    ]);
+  });
+});
+
+describe("ambiguous wiki links", () => {
+  const shared = [
+    { path: "z/plan.md", title: "Plan Z" },
+    { path: "items/a/plan.md", title: "Plan A" },
+    { path: "items/b/plan.md", title: "Plan B" },
+  ];
+
+  test("resolve to the nearest folder whatever order the notes were scanned in, and list the alternatives", () => {
+    const forwards = buildLinkIndex(shared, () => false);
+    const backwards = buildLinkIndex([...shared].reverse(), () => false);
+    expect(resolveLink("items/c/current.md", { raw: "plan", kind: "wiki" }, forwards)).toEqual({ status: "note", target: "items/a/plan.md", alternatives: ["items/b/plan.md", "z/plan.md"] });
+    expect(resolveLink("items/c/current.md", { raw: "plan", kind: "wiki" }, backwards).target).toBe("items/a/plan.md");
+    expect(resolveLink("README.md", { raw: "plan", kind: "wiki" }, backwards).target).toBe("z/plan.md");
   });
 });
 

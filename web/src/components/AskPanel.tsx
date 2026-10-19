@@ -3,10 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link, useLocation } from "wouter";
-import type { AskCitation, AskSource, ChatTurn } from "../../../src/shared/types.ts";
+import type { AiUsage, AskCitation, AskSource, ChatTurn } from "../../../src/shared/types.ts";
 import { streamEvents } from "../lib/api.ts";
 import { useInfo, useNoteMap } from "../lib/queries.ts";
 import { noteHref, pathFromRoute } from "../lib/routes.ts";
+import { UsageLine } from "./AssistPanel.tsx";
 import { Button, clsx, Spinner } from "./ui.tsx";
 
 interface Segment {
@@ -17,10 +18,14 @@ interface Segment {
 interface Answer {
   question: string;
   contextPath: string | null;
+  /** Every note in the request, numbered across the conversation: earlier turns' notes first, then this turn's. */
   sources: AskSource[];
+  /** How many of `sources` came from earlier turns; the rest were attached for this question. */
+  carried: number;
   segments: Segment[];
   status: "streaming" | "done" | "error";
   error: string | null;
+  usage: AiUsage | null;
 }
 
 // Model output is untrusted: only our own cite: scheme bypasses the default URL sanitizer.
@@ -28,11 +33,13 @@ const keepCitations = (url: string) => (url.startsWith("cite:") ? url : defaultU
 
 const answerText = (a: Answer) => a.segments.map((s) => s.text).join("");
 
-/** Source numbers follow the order in which the answer first cites them; uncited sources come after. */
+const attached = (a: Answer) => a.sources.filter((s) => s.index >= a.carried);
+
+/** Source numbers follow the order in which the answer first cites them; this turn's uncited sources come after. */
 function numbering(answer: Answer): Map<number, number> {
   const order = new Map<number, number>();
   for (const s of answer.segments) for (const c of s.citations) if (!order.has(c.documentIndex)) order.set(c.documentIndex, order.size + 1);
-  for (const s of answer.sources) if (!order.has(s.index)) order.set(s.index, order.size + 1);
+  for (const s of attached(answer)) if (!order.has(s.index)) order.set(s.index, order.size + 1);
   return order;
 }
 
@@ -93,7 +100,7 @@ function AnswerView({ answer, onNavigate }: { answer: Answer; onNavigate: () => 
   );
 
   const text = withMarkers(answer, numbers);
-  const sorted = [...answer.sources].sort((a, b) => numbers.get(a.index)! - numbers.get(b.index)!);
+  const sorted = answer.sources.filter((s) => numbers.has(s.index)).sort((a, b) => numbers.get(a.index)! - numbers.get(b.index)!);
   return (
     <div className="space-y-3">
       {answer.sources.length > 0 && answer.status === "streaming" && !text && (
@@ -126,6 +133,7 @@ function AnswerView({ answer, onNavigate }: { answer: Answer; onNavigate: () => 
           ))}
         </div>
       )}
+      {answer.status === "done" && answer.usage && <UsageLine usage={answer.usage} className="px-1" />}
     </div>
   );
 }
@@ -149,16 +157,19 @@ export function AskPanel({ seed, onClose }: { seed: { question: string; nonce: n
   const ask = async (question: string) => {
     const q = question.trim();
     if (!q || streaming) return;
-    const history: ChatTurn[] = answers.filter((a) => a.status === "done").flatMap((a) => [
+    const earlier = answers.filter((a) => a.status === "done");
+    const history: ChatTurn[] = earlier.flatMap((a) => [
       { role: "user" as const, content: a.question },
       { role: "assistant" as const, content: answerText(a) },
     ]);
+    const previousSources = earlier.map((a) => attached(a).map((s) => s.path));
+    const carried = previousSources.reduce((sum, paths) => sum + paths.length, 0);
     setDraft("");
-    setAnswers((list) => [...list, { question: q, contextPath, sources: [], segments: [], status: "streaming", error: null }]);
+    setAnswers((list) => [...list, { question: q, contextPath, sources: [], carried, segments: [], status: "streaming", error: null, usage: null }]);
     const controller = new AbortController();
     abort.current = controller;
     try {
-      for await (const event of streamEvents("/api/ai/ask", { question: q, history, contextPath }, controller.signal)) {
+      for await (const event of streamEvents("/api/ai/ask", { question: q, history, contextPath, previousSources }, controller.signal)) {
         if (event.type === "sources") update((a) => ({ ...a, sources: event.sources }));
         if (event.type === "block") update((a) => ({ ...a, segments: [...a.segments, { text: "", citations: [] }] }));
         if (event.type === "text")
@@ -177,7 +188,7 @@ export function AskPanel({ seed, onClose }: { seed: { question: string; nonce: n
           });
         if (event.type === "error") update((a) => ({ ...a, status: "error", error: event.message }));
         if (event.type === "done")
-          update((a) => ({ ...a, status: "done", error: event.stopReason === "refusal" ? "Claude declined to answer this question." : event.stopReason === "max_tokens" ? "The answer was cut off at the length limit." : null }));
+          update((a) => ({ ...a, status: "done", usage: event.usage ?? null, error: event.stopReason === "refusal" ? "Claude declined to answer this question." : event.stopReason === "max_tokens" ? "The answer was cut off at the length limit." : null }));
       }
       update((a) => (a.status === "streaming" ? { ...a, status: "done" } : a));
     } catch (err) {

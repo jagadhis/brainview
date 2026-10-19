@@ -3,7 +3,8 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { loadConfig } from "@anthropic-ai/sdk/lib/credentials";
 import { z } from "zod";
 import { isPropertyKey } from "../shared/frontmatter.ts";
-import type { AiStatus, AskEvent, AskRequest, AskSource, AssistAction, AssistRequest, Suggestions } from "../shared/types.ts";
+import type { AiStatus, AiUsage, AskEvent, AskRequest, AskSource, AssistAction, AssistRequest, Suggestions } from "../shared/types.ts";
+import { contentWords } from "./stopwords.ts";
 import type { Vault } from "./vault.ts";
 
 export const DEFAULT_MODEL = "claude-opus-5-5";
@@ -12,7 +13,12 @@ export const DEFAULT_MODEL = "claude-opus-5-5";
 const FALLBACK: Pick<Anthropic.Beta.MessageCreateParams, "betas" | "fallbacks"> = { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" };
 
 const MAX_SOURCES = 8;
+// Across a whole conversation; earlier turns' notes count toward it, so a long chat cannot grow without bound.
+const MAX_CONVERSATION_SOURCES = 20;
 const MAX_SOURCE_CHARS = 60_000;
+const ASSIST_BEFORE_CHARS = 12_000;
+const ASSIST_AFTER_CHARS = 4_000;
+const SUGGESTION_CACHE_SIZE = 200;
 const RECENCY = /\b(recent(ly)?|latest|newest|this week|today|yesterday|last (few )?days|changed|updated)\b/i;
 
 const ASK_SYSTEM = `You answer questions about a personal knowledge base ("the brain") made of Markdown notes.
@@ -46,8 +52,19 @@ const SuggestionSchema = z.object({
 
 export class AiUnavailable extends Error {}
 
+function usageOf(usage: Anthropic.Beta.BetaUsage): AiUsage {
+  return {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
+  };
+}
+
 export class Ai {
   private client: Anthropic | null = null;
+  /** Suggestions per note version, so reopening a note does not pay for the same answer twice. */
+  private suggestions = new Map<string, Suggestions>();
 
   constructor(
     private readonly vault: Vault,
@@ -76,48 +93,75 @@ export class Ai {
     return this.client;
   }
 
-  private async retrieve(question: string, contextPath: string | null): Promise<AskSource[]> {
+  /** Notes for this turn that earlier turns did not already attach. */
+  private async retrieve(question: string, contextPath: string | null, attached: Set<string>): Promise<string[]> {
+    const budget = Math.min(MAX_SOURCES, MAX_CONVERSATION_SOURCES - attached.size);
     const paths = new Set<string>();
-    if (contextPath && this.vault.content(contextPath)) paths.add(contextPath);
+    const add = (path: string) => {
+      if (paths.size < budget && !attached.has(path) && this.vault.content(path)) paths.add(path);
+    };
+    if (contextPath) add(contextPath);
     // Search ranks by relevance, not time, so questions about recent activity also get the newest notes.
     if (RECENCY.test(question)) {
-      for (const note of this.vault.list().sort((a, b) => b.mtime - a.mtime).slice(0, 4)) paths.add(note.path);
+      for (const note of this.vault.list().sort((a, b) => b.mtime - a.mtime).slice(0, 4)) add(note.path);
     }
-    for (const hit of await this.vault.searchNotes(question, MAX_SOURCES * 2, "OR")) {
-      if (paths.size >= MAX_SOURCES) break;
-      paths.add(hit.path);
-    }
-    return [...paths].map((path, index) => {
-      const note = this.vault.content(path)!;
-      return { index, path, title: note.title, excerpted: note.content.length > MAX_SOURCE_CHARS };
-    });
+    // Words like "what" or "did" would match nearly every note in an OR search.
+    const query = contentWords(question).join(" ") || question;
+    for (const hit of await this.vault.searchNotes(query, MAX_SOURCES * 3, "OR")) add(hit.path);
+    return [...paths];
+  }
+
+  private document(path: string, index: number): { source: AskSource; block: Anthropic.Beta.BetaRequestDocumentBlock } {
+    const note = this.vault.content(path) ?? { title: path, content: "" };
+    const excerpted = note.content.length > MAX_SOURCE_CHARS;
+    return {
+      source: { index, path, title: note.title, excerpted },
+      block: {
+        type: "document",
+        source: { type: "text", media_type: "text/plain", data: note.content.slice(0, MAX_SOURCE_CHARS) || "(empty note)" },
+        title: path,
+        context: excerpted ? `Note "${note.title}" (first ${MAX_SOURCE_CHARS} characters only)` : `Note "${note.title}"`,
+        citations: { enabled: true },
+      },
+    };
   }
 
   async *ask(req: AskRequest, signal: AbortSignal): AsyncGenerator<AskEvent> {
     const client = this.anthropic();
-    const sources = await this.retrieve(req.question, req.contextPath);
-    yield { type: "sources", sources };
-
-    const documents: Anthropic.Beta.BetaRequestDocumentBlock[] = sources.map((s) => {
-      const content = this.vault.content(s.path)!.content;
-      return {
-        type: "document",
-        source: { type: "text", media_type: "text/plain", data: content.slice(0, MAX_SOURCE_CHARS) || "(empty note)" },
-        title: s.path,
-        context: s.excerpted ? `Note "${s.title}" (first ${MAX_SOURCE_CHARS} characters only)` : `Note "${s.title}"`,
-        citations: { enabled: true },
-      };
+    // Citation document indexes count every document in the request, so earlier turns' notes are numbered first.
+    let index = 0;
+    const sources: AskSource[] = [];
+    const earlier = req.previousSources ?? [];
+    const attached = new Set<string>();
+    // The client sends these back each turn, so they are bounded here like fresh retrieval: notes only, each once.
+    const carry = (paths: string[]) =>
+      paths.filter((path) => {
+        if (attached.size >= MAX_CONVERSATION_SOURCES || attached.has(path) || !this.vault.content(path)) return false;
+        attached.add(path);
+        return true;
+      });
+    let userTurn = 0;
+    const messages: Anthropic.Beta.BetaMessageParam[] = req.history.map((turn) => {
+      if (turn.role !== "user") return { role: turn.role, content: turn.content };
+      const docs = carry(earlier[userTurn++] ?? []).map((path) => this.document(path, index++));
+      sources.push(...docs.map((d) => d.source));
+      return { role: "user", content: [...docs.map((d) => d.block), { type: "text", text: turn.content }] };
     });
-    const messages: Anthropic.Beta.BetaMessageParam[] = [
-      ...req.history.map((turn) => ({ role: turn.role, content: turn.content })),
-      {
-        role: "user",
-        content: [
-          ...documents,
-          { type: "text", text: sources.length ? req.question : `${req.question}\n\n(No notes matched this question.)` },
-        ],
-      },
-    ];
+    const fresh = (await this.retrieve(req.question, req.contextPath, new Set(sources.map((s) => s.path)))).map((path) => this.document(path, index++));
+    sources.push(...fresh.map((d) => d.source));
+    yield { type: "sources", sources };
+    messages.push({
+      role: "user",
+      content: [
+        ...fresh.map((d) => d.block),
+        {
+          type: "text",
+          text: sources.length ? req.question : `${req.question}\n\n(No notes matched this question.)`,
+          // Everything up to here is resent unchanged by a follow-up, so it is read from the cache on the next turn.
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
 
     const stream = client.beta.messages.stream(
       {
@@ -139,7 +183,7 @@ export class Ai {
       }
     }
     const final = await stream.finalMessage();
-    yield { type: "done", stopReason: final.stop_reason };
+    yield { type: "done", stopReason: final.stop_reason, usage: usageOf(final.usage) };
   }
 
   async *assist(req: AssistRequest, signal: AbortSignal): AsyncGenerator<AskEvent> {
@@ -148,9 +192,9 @@ export class Ai {
     if (!instruction) throw new Error("Write an instruction first");
     const prompt = [
       `Note: ${req.path}`,
-      `<before_passage>\n${req.before.slice(-4000)}\n</before_passage>`,
+      `<before_passage>\n${req.before.slice(-ASSIST_BEFORE_CHARS)}\n</before_passage>`,
       `<passage>\n${req.selection}\n</passage>`,
-      `<after_passage>\n${req.after.slice(0, 2000)}\n</after_passage>`,
+      `<after_passage>\n${req.after.slice(0, ASSIST_AFTER_CHARS)}\n</after_passage>`,
       `Instruction: ${instruction}`,
     ].join("\n\n");
 
@@ -169,13 +213,16 @@ export class Ai {
       if (event.type === "content_block_delta" && event.delta.type === "text_delta") yield { type: "text", text: event.delta.text };
     }
     const final = await stream.finalMessage();
-    yield { type: "done", stopReason: final.stop_reason };
+    yield { type: "done", stopReason: final.stop_reason, usage: usageOf(final.usage) };
   }
 
   async suggest(path: string, signal: AbortSignal): Promise<Suggestions> {
     const client = this.anthropic();
     const note = this.vault.get(path);
     if (!note) throw new Error("Note not found");
+    const cacheKey = `${path}\0${note.hash}`;
+    const cached = this.suggestions.get(cacheKey);
+    if (cached) return cached;
     const linked = new Set(note.outgoing.map((l) => l.target));
     const query = [note.title, ...note.headings.slice(0, 12).map((h) => h.text), ...note.tags].join(" ");
     const candidates = (await this.vault.searchNotes(query, 40, "OR"))
@@ -203,12 +250,16 @@ export class Ai {
     const parsed = response.parsed_output;
     if (!parsed) throw new Error("Claude returned no suggestions");
     const allowed = new Map(candidates.map((c) => [c.path, c.title]));
-    return {
+    const suggestions: Suggestions = {
       summary: parsed.summary,
       tags: parsed.tags.filter((t) => !note.tags.includes(t)),
       related: parsed.related.filter((r) => allowed.has(r.path)).map((r) => ({ ...r, title: allowed.get(r.path)! })),
       frontmatter: parsed.frontmatter.filter((f) => isPropertyKey(f.key) && !(f.key in (note.frontmatter ?? {}))),
+      usage: usageOf(response.usage),
     };
+    if (this.suggestions.size >= SUGGESTION_CACHE_SIZE) this.suggestions.delete(this.suggestions.keys().next().value!);
+    this.suggestions.set(cacheKey, suggestions);
+    return suggestions;
   }
 }
 

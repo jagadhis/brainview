@@ -40,13 +40,14 @@
     "start": "bun src/cli.ts",
     "test": "bun test src",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepublishOnly": "bun run typecheck && bun test src && bun run build"
+    "prepublishOnly": "bun run typecheck && bun run build && bun test src"
   },
   "engines": {
     "bun": ">=1.2"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "github-slugger": "^2.0.0",
     "minisearch": "^7.2.0",
     "yaml": "^2.9.1",
@@ -67,6 +68,7 @@
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.3",
+    "@tanstack/react-virtual": "^3.14.21",
     "@types/bun": "^1.4.3",
     "@types/diff": "^8.0.0",
     "@types/hast": "^3.0.5",

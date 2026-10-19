@@ -3,6 +3,7 @@ import { yamlFrontmatter } from "@codemirror/lang-yaml";
 import { languages } from "@codemirror/language-data";
 import { Prec } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
+import { useQueryClient } from "@tanstack/react-query";
 import CodeMirror, { EditorSelection, EditorView, type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { diffLines } from "diff";
 import { AlertTriangle, Check, Columns2, Eye, FileCode2, ListChecks, Lock, Save, Sparkles, X } from "lucide-react";
@@ -11,7 +12,7 @@ import { parseFrontmatter } from "../../../src/shared/frontmatter.ts";
 import type { AssistAction, NoteDetail } from "../../../src/shared/types.ts";
 import { api, isConflict } from "../lib/api.ts";
 import { useClientLinkResolver } from "../lib/link-resolver.ts";
-import { useInfo, useNoteMap } from "../lib/queries.ts";
+import { keys, useInfo, useNoteMap } from "../lib/queries.ts";
 import { useToast } from "../lib/toast.tsx";
 import { useUi } from "../lib/ui-state.tsx";
 import { AssistPanel, ASSIST_ACTIONS } from "./AssistPanel.tsx";
@@ -40,7 +41,8 @@ const MODES: { id: Mode; icon: typeof Columns2; label: string }[] = [
 
 export function NoteEditor({ note, initialLine, readOnly, onDone }: { note: NoteDetail; initialLine: number | null; readOnly: boolean; onDone: () => void }) {
   const toast = useToast();
-  const { dark } = useUi();
+  const client = useQueryClient();
+  const { dark, setEditorDirty } = useUi();
   const { data: info } = useInfo();
   const notes = useNoteMap();
   const resolveNote = useClientLinkResolver(notes, note.path);
@@ -75,6 +77,11 @@ export function NoteEditor({ note, initialLine, readOnly, onDone }: { note: Note
   }, [changedOnDisk, dirty, note.content, note.hash]);
 
   useEffect(() => {
+    setEditorDirty(dirty);
+    return () => setEditorDirty(false);
+  }, [dirty, setEditorDirty]);
+
+  useEffect(() => {
     if (!dirty) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener("beforeunload", warn);
@@ -92,6 +99,8 @@ export function NoteEditor({ note, initialLine, readOnly, onDone }: { note: Note
       setSaving(true);
       try {
         const result = await api.save(note.path, content, baseHash);
+        // The cached note carries the hash that a delete or move sends next, before the watcher's refetch lands.
+        client.setQueryData(keys.note(note.path), result);
         setSaved({ content, hash: result.hash });
         setConflict(null);
         toast("Saved", "success");
@@ -102,7 +111,7 @@ export function NoteEditor({ note, initialLine, readOnly, onDone }: { note: Note
         setSaving(false);
       }
     },
-    [buffer, note.generated, note.path, readOnly, saved.hash, saving, toast],
+    [buffer, client, note.generated, note.path, readOnly, saved.hash, saving, toast],
   );
 
   const saveRef = useRef(save);
@@ -251,9 +260,16 @@ export function NoteEditor({ note, initialLine, readOnly, onDone }: { note: Note
               basicSetup={{ foldGutter: true, highlightActiveLine: true, bracketMatching: true }}
             />
             {toolbarAt && selection && info?.ai.available && !readOnly && !assist && (
-              <div className="animate-in absolute z-20 flex items-center gap-0.5 rounded-lg border border-line bg-raised p-0.5 shadow-lg shadow-black/10" style={{ top: Math.max(4, toolbarAt.top), left: toolbarAt.left }}>
+              <div
+                // Shifted left so every action fits beside a selection near the right edge; it wraps only when the editor is narrower than the toolbar.
+                ref={(el) => {
+                  if (el?.parentElement) el.style.left = `${Math.max(8, Math.min(toolbarAt.left, el.parentElement.clientWidth - el.offsetWidth - 8))}px`;
+                }}
+                className="animate-in absolute z-20 flex w-max max-w-[calc(100%-16px)] flex-wrap items-center gap-0.5 rounded-lg border border-line bg-raised p-0.5 shadow-lg shadow-black/10"
+                style={{ top: Math.max(4, toolbarAt.top), left: toolbarAt.left }}
+              >
                 <Sparkles size={13} className="mx-1.5 text-accent" />
-                {ASSIST_ACTIONS.slice(0, 5).map((a) => (
+                {ASSIST_ACTIONS.map((a) => (
                   <button type="button" key={a.id} onMouseDown={(e) => e.preventDefault()} onClick={() => startAssist(a.id)} className="rounded-md px-2 py-1 text-[12px] text-ink-soft hover:bg-sunken hover:text-ink">
                     {a.label}
                   </button>

@@ -1,7 +1,7 @@
 import { diffWords } from "diff";
 import { Check, CornerDownLeft, RotateCcw, Sparkles, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AssistAction } from "../../../src/shared/types.ts";
+import type { AiUsage, AssistAction } from "../../../src/shared/types.ts";
 import { streamEvents } from "../lib/api.ts";
 import { Button, clsx, Spinner } from "./ui.tsx";
 
@@ -13,6 +13,17 @@ export const ASSIST_ACTIONS: { id: Exclude<AssistAction, "custom">; label: strin
   { id: "continue", label: "Continue" },
   { id: "expand", label: "Expand" },
 ];
+
+/** Token counts for one AI call. Input includes the tokens read from or written to the prompt cache. */
+export function UsageLine({ usage, className }: { usage: AiUsage; className?: string }) {
+  const input = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+  return (
+    <div className={clsx("text-[11px] tabular-nums text-ink-faint", className)}>
+      {input.toLocaleString()} input · {usage.outputTokens.toLocaleString()} output tokens
+      {usage.cacheReadTokens > 0 && ` · ${usage.cacheReadTokens.toLocaleString()} cached`}
+    </div>
+  );
+}
 
 interface Props {
   path: string;
@@ -28,6 +39,7 @@ export function AssistPanel({ path, doc, action, selection, onAccept, onClose }:
   const [output, setOutput] = useState("");
   const [status, setStatus] = useState<"idle" | "streaming" | "done" | "error">(action === "custom" ? "idle" : "streaming");
   const [error, setError] = useState<string | null>(null);
+  const [usage, setUsage] = useState<AiUsage | null>(null);
   const abort = useRef<AbortController | null>(null);
   const docRef = useRef(doc);
 
@@ -38,6 +50,7 @@ export function AssistPanel({ path, doc, action, selection, onAccept, onClose }:
       abort.current = controller;
       setOutput("");
       setError(null);
+      setUsage(null);
       setStatus("streaming");
       try {
         const events = streamEvents(
@@ -49,6 +62,7 @@ export function AssistPanel({ path, doc, action, selection, onAccept, onClose }:
           if (event.type === "text") setOutput((o) => o + event.text);
           if (event.type === "error") throw new Error(event.message);
           if (event.type === "done" && event.stopReason === "refusal") throw new Error("Claude declined this request.");
+          if (event.type === "done" && event.usage) setUsage(event.usage);
         }
         setStatus("done");
       } catch (err) {
@@ -112,6 +126,7 @@ export function AssistPanel({ path, doc, action, selection, onAccept, onClose }:
       </div>
 
       <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2">
+        {status === "done" && usage && <UsageLine usage={usage} className="mr-auto" />}
         {status === "streaming" ? (
           <Button size="sm" variant="ghost" onClick={() => (abort.current?.abort(), setStatus(result ? "done" : "idle"))}>
             <Square size={11} /> Stop

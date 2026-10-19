@@ -3,8 +3,19 @@ import { existsSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { artifactKind } from "../shared/artifacts.ts";
-import type { AskEvent, AskRequest, AssistRequest, SaveRequest, VaultEvent, VaultInfo } from "../shared/types.ts";
+import type {
+  AskEvent,
+  AskRequest,
+  AssistRequest,
+  CreateRequest,
+  FixLinkRequest,
+  MoveRequest,
+  SaveRequest,
+  VaultEvent,
+  VaultInfo,
+} from "../shared/types.ts";
 import { Ai, describeAiError } from "./ai.ts";
+import type { GitHistory } from "./history.ts";
 import { SaveConflict, Vault, VaultPathError } from "./vault.ts";
 
 export interface ServerOptions {
@@ -12,7 +23,11 @@ export interface ServerOptions {
   ai: Ai;
   port: number;
   readOnly: boolean;
+  history?: GitHistory | null;
 }
+
+// Below this a gzip round trip costs more than it saves on localhost.
+const GZIP_MIN_BYTES = 32 * 1024;
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const WEB_ROOT = fileURLToPath(new URL("../../dist/web/", import.meta.url));
@@ -59,6 +74,28 @@ async function body<T>(req: Request): Promise<T> {
   } catch {
     throw new HttpError(400, "Invalid JSON body");
   }
+}
+
+function requiredString(value: unknown, name: string): string {
+  if (typeof value !== "string" || value === "") throw new HttpError(400, `${name} is required`);
+  return value;
+}
+
+/** A bounded integer query parameter; a missing or malformed value falls back to the default. */
+function intParam(url: URL, name: string, fallback: number, max: number): number {
+  const value = Number.parseInt(url.searchParams.get(name) ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? Math.min(value, max) : fallback;
+}
+
+/** Large JSON answers (the table is about 2 MB for 2,000 notes) are gzipped when the browser accepts it. */
+async function compress(req: Request, res: Response): Promise<Response> {
+  if (!res.headers.get("content-type")?.includes("application/json") || !/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) return res;
+  const body = new Uint8Array(await res.arrayBuffer());
+  const headers = new Headers(res.headers);
+  if (body.byteLength < GZIP_MIN_BYTES) return new Response(body, { status: res.status, headers });
+  headers.set("content-encoding", "gzip");
+  headers.set("vary", "accept-encoding");
+  return new Response(Bun.gzipSync(body), { status: res.status, headers });
 }
 
 function requiredParam(url: URL, name: string): string {
@@ -145,7 +182,7 @@ function serveStatic(pathname: string): Response {
   return new Response(Bun.file(join(WEB_ROOT, "index.html")), { headers: { ...NO_FRAMING, "cache-control": "no-store" } });
 }
 
-export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
+export function startServer({ vault, ai, port, readOnly, history = null }: ServerOptions) {
   const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
   const broadcast = (event: VaultEvent) => {
@@ -158,7 +195,10 @@ export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
       }
     }
   };
-  vault.onChange((paths) => broadcast({ type: "changed", paths }));
+  vault.onChange((paths, links) => broadcast({ type: "changed", paths, links }));
+  const writable = () => {
+    if (readOnly) throw new HttpError(403, "brainview was started with --read-only");
+  };
   // A sandboxed HTML artifact has an opaque origin, so its own script and style loads are cross-site and carry no Referer.
   // It is redirected under /t/<token>, which its relative references inherit. The token covers only the artifact's folder
   // and the folders below it, so an artifact that leaks its own URL exposes no more than that.
@@ -206,24 +246,80 @@ export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
       return new Response(Bun.file(full), { headers: fileHeaders(full) });
     }
     if (pathname === "/api/info" && method === "GET") {
-      const info: VaultInfo = { name: vault.name, root: vault.root, noteCount: vault.size, readOnly, ai: ai.status(), mounts: vault.mounts };
+      const info: VaultInfo = {
+        name: vault.name,
+        root: vault.root,
+        noteCount: vault.size,
+        readOnly,
+        config: vault.config,
+        git: history !== null,
+        ai: ai.status(),
+        mounts: vault.mounts,
+      };
       return json(info);
     }
-    if (pathname === "/api/notes" && method === "GET") return json(vault.listing());
-    if (pathname === "/api/table" && method === "GET") return json(vault.list());
+    // ?path=a&path=b returns just those notes, so a change can patch the client's copy instead of refetching all of it.
+    const only = url.searchParams.has("path") ? url.searchParams.getAll("path") : undefined;
+    if (pathname === "/api/notes" && method === "GET") return json(vault.listing(only));
+    if (pathname === "/api/table" && method === "GET") return json(vault.list(only));
     if (pathname === "/api/artifacts" && method === "GET") return json(vault.listArtifacts());
     if (pathname === "/api/note" && method === "GET") {
       const note = vault.get(requiredParam(url, "path"));
       return note ? json(note) : json({ error: "Note not found" }, 404);
     }
-    if (pathname === "/api/note" && (method === "PUT" || method === "POST")) {
-      if (readOnly) throw new HttpError(403, "brainview was started with --read-only");
+    if (pathname === "/api/note" && method === "PUT") {
+      writable();
       const { path, content, baseHash } = await body<SaveRequest>(req);
       if (typeof path !== "string" || typeof content !== "string") throw new HttpError(400, "path and content are required");
-      return json(await vault.save(path, content, method === "POST" ? null : (baseHash ?? null)));
+      return json(await vault.save(path, content, baseHash ?? null));
+    }
+    if (pathname === "/api/note" && method === "POST") {
+      writable();
+      const { path, content, template, title } = await body<CreateRequest>(req);
+      requiredString(path, "path");
+      if (template) return json(await vault.createFromTemplate(path, requiredString(template, "template"), typeof title === "string" ? title : null));
+      if (typeof content !== "string") throw new HttpError(400, "content or template is required");
+      return json(await vault.save(path, content, null));
+    }
+    if (pathname === "/api/note" && method === "DELETE") {
+      writable();
+      const { path, baseHash } = await body<{ path: string; baseHash: string }>(req);
+      return json(await vault.delete(requiredString(path, "path"), requiredString(baseHash, "baseHash")));
+    }
+    if (pathname === "/api/note/move" && method === "POST") {
+      writable();
+      const { from, to } = await body<MoveRequest>(req);
+      return json(await vault.move(requiredString(from, "from"), requiredString(to, "to")));
+    }
+    if (pathname === "/api/note/restore" && method === "POST") {
+      writable();
+      const { trashId } = await body<{ trashId: string }>(req);
+      return json(await vault.restore(requiredString(trashId, "trashId")));
+    }
+    if (pathname === "/api/fix-link" && method === "POST") {
+      writable();
+      const fix = await body<FixLinkRequest>(req);
+      if (typeof fix.line !== "number") throw new HttpError(400, "line is required");
+      return json(await vault.fixLink(requiredString(fix.path, "path"), fix.line, requiredString(fix.raw, "raw"), requiredString(fix.replacement, "replacement"), requiredString(fix.baseHash, "baseHash")));
+    }
+    if (pathname === "/api/daily" && method === "POST") {
+      writable();
+      return json(await vault.daily());
+    }
+    if (pathname === "/api/templates" && method === "GET") return json(vault.templates());
+    if (pathname === "/api/related" && method === "GET") return json(await vault.related(requiredParam(url, "path"), intParam(url, "limit", 8, 30)));
+    if (pathname === "/api/tags" && method === "GET") return json(vault.tags());
+    if (pathname === "/api/timeline" && method === "GET") return json(vault.timeline(intParam(url, "limit", 500, 5000)));
+    if (pathname === "/api/history" && method === "GET") {
+      const path = requiredParam(url, "path");
+      return json(history && vault.get(path) ? await history.log(path) : []);
+    }
+    if (pathname === "/api/history/file" && method === "GET") {
+      const content = history ? await history.show(requiredParam(url, "rev"), requiredParam(url, "path")) : null;
+      return content === null ? json({ error: "Not in history" }, 404) : json({ content });
     }
     if (pathname === "/api/search" && method === "GET") {
-      return json(await vault.searchNotes(url.searchParams.get("q") ?? "", Number(url.searchParams.get("limit") ?? 20)));
+      return json(await vault.searchNotes(url.searchParams.get("q") ?? "", intParam(url, "limit", 20, 100)));
     }
     if (pathname === "/api/graph" && method === "GET") return json(vault.graph());
     if (pathname === "/api/health" && method === "GET") return json(vault.health());
@@ -264,7 +360,7 @@ export function startServer({ vault, ai, port, readOnly }: ServerOptions) {
     async fetch(req, server) {
       try {
         guard(req, server.port!);
-        return await route(req, new URL(req.url));
+        return await compress(req, await route(req, new URL(req.url)));
       } catch (err) {
         if (err instanceof HttpError) return json({ error: err.message }, err.status);
         if (err instanceof VaultPathError) return json({ error: err.message }, 400);

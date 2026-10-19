@@ -149,3 +149,58 @@ describe("artifact files", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("note operations over HTTP", () => {
+  const send = (method: string, path: string, body: unknown, at = base) =>
+    fetch(`${at}${path}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  test("a read-only server refuses every write route and changes nothing", async () => {
+    const readOnly = startServer({ vault, ai: new Ai(vault, "claude-opus-5-5", false), port: 0, readOnly: true });
+    const at = `http://127.0.0.1:${readOnly.port}`;
+    const hash = vault.get("note.md")!.hash;
+    const statuses = await Promise.all([
+      send("POST", "/api/note", { path: "new.md", content: "# New\n" }, at),
+      send("DELETE", "/api/note", { path: "note.md", baseHash: hash }, at),
+      send("POST", "/api/note/move", { from: "note.md", to: "moved.md" }, at),
+      send("POST", "/api/note/restore", { trashId: "x" }, at),
+      send("POST", "/api/fix-link", { path: "note.md", line: 1, raw: "a", replacement: "b", baseHash: hash }, at),
+      send("POST", "/api/daily", {}, at),
+    ]).then((responses) => responses.map((r) => r.status));
+    readOnly.stop(true);
+    expect(statuses).toEqual([403, 403, 403, 403, 403, 403]);
+    expect(vault.get("note.md")).not.toBeNull();
+    expect(vault.get("new.md")).toBeNull();
+  });
+
+  test("moves a note and deletes it into the trash", async () => {
+    await send("POST", "/api/note", { path: "temp.md", content: "# Temp\n" });
+    expect((await send("POST", "/api/note/move", { from: "temp.md", to: "kept/temp.md" })).status).toBe(200);
+    const removed = await send("DELETE", "/api/note", { path: "kept/temp.md", baseHash: vault.get("kept/temp.md")!.hash });
+    expect(removed.status).toBe(200);
+    expect(vault.get("kept/temp.md")).toBeNull();
+    expect((await removed.json()).trashId).toMatch(/^[\w-]+$/);
+  });
+
+  test("returns only the asked-for notes when paths are given", async () => {
+    const res = await fetch(`${base}/api/table?path=note.md&path=missing.md`);
+    expect((await res.json()).map((n: { path: string }) => n.path)).toEqual(["note.md"]);
+  });
+
+  test("treats a malformed search limit as the default instead of returning nothing", async () => {
+    const res = await fetch(`${base}/api/search?q=note&limit=abc`);
+    expect((await res.json()).length).toBeGreaterThan(0);
+  });
+
+  test("gzips a large JSON answer when the browser accepts it", async () => {
+    for (let i = 0; i < 300; i++) await writeFile(join(dir, "brain", `bulk-${i}.md`), `---\ntitle: Bulk note number ${i}\nsummary: ${"words ".repeat(30)}\n---\n# Bulk ${i}\n`);
+    const big = await Vault.open(join(dir, "brain"));
+    const bigServer = startServer({ vault: big, ai: new Ai(big, "claude-opus-5-5", false), port: 0, readOnly: true });
+    const res = await fetch(`http://127.0.0.1:${bigServer.port}/api/table`, { headers: { "accept-encoding": "gzip" }, decompress: false } as RequestInit);
+    const encoding = res.headers.get("content-encoding");
+    const raw = new Uint8Array(await res.arrayBuffer());
+    bigServer.stop(true);
+    big.close();
+    expect(encoding).toBe("gzip");
+    expect(JSON.parse(new TextDecoder().decode(Bun.gunzipSync(raw))).length).toBeGreaterThan(300);
+  });
+});

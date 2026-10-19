@@ -1,41 +1,95 @@
-import { Eye, EyeOff, LocateFixed, Maximize2, Network, PanelLeftClose, PanelLeftOpen, Search, X } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Boxes, Eye, EyeOff, History, LocateFixed, Maximize2, Network, PanelLeftClose, PanelLeftOpen, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods, type LinkObject, type NodeObject } from "react-force-graph-2d";
 import { useLocation, useSearch } from "wouter";
-import { Button, clsx, Empty, FolderDot, Spinner } from "../components/ui.tsx";
-import { topFolder, useFolderColor } from "../lib/colors.ts";
-import { useGraph } from "../lib/queries.ts";
+import { Button, clsx, Empty, Spinner } from "../components/ui.tsx";
+import { api } from "../lib/api.ts";
+import { FOLDER_PALETTES, topFolder, useFolderColor, type Tone } from "../lib/colors.ts";
+import { formatDate } from "../lib/format.ts";
+import { keys, useGraph, useInfo, useNotes } from "../lib/queries.ts";
 import { noteHref } from "../lib/routes.ts";
+import { useUi } from "../lib/ui-state.tsx";
 
 interface GNode {
   id: string;
   title: string;
-  group: string;
+  label: string;
   degree: number;
   radius: number;
 }
 type Node = NodeObject<GNode>;
 type Edge = LinkObject<GNode>;
+type ColorBy = "top" | "sub" | "prop";
 
 const PREFS_KEY = "brainview:graph";
 const MAX_LABELS = 120;
 const LABEL_ZOOM = 1.2;
 const ALWAYS_LABEL_BELOW = 80;
+const LABEL_FONT = `px "Inter Variable", system-ui, sans-serif`;
+const LEGEND_LIMIT = 24;
+const NONE_GROUP = "(no value)";
+const NONE_COLOR = "#94a3b8";
+const CLUSTER_STRENGTH = 0.25;
+const CLUSTER_SPACING = 18;
+const CROSS_LINK_FACTOR = 0.04;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+const COLOR_MODES: [ColorBy, string][] = [
+  ["top", "Top folder"],
+  ["sub", "Subfolder"],
+  ["prop", "Property"],
+];
+// Index into each folder palette for the preset colour names a field config may use.
+const PRESET_INDEX: Record<Tone, number> = { violet: 8, amber: 1, red: 3, blue: 4, green: 6, gray: 10 };
 
 interface Prefs {
-  hidden: string[];
+  /** Hidden groups per colour mode, keyed by `hiddenKey`. */
+  hidden: Record<string, string[]>;
   hideOrphans: boolean;
+  colorBy: ColorBy;
+  field: string;
+  cluster: boolean;
 }
+
+const DEFAULT_PREFS: Prefs = { hidden: {}, hideOrphans: true, colorBy: "top", field: "", cluster: false };
 
 function loadPrefs(): Prefs {
   try {
-    return { hidden: [], hideOrphans: true, ...(JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>) };
+    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Omit<Prefs, "hidden">> & { hidden?: Prefs["hidden"] | string[] };
+    // Older saves kept one list of hidden top folders.
+    const hidden = Array.isArray(saved.hidden) ? { top: saved.hidden } : (saved.hidden ?? {});
+    return { ...DEFAULT_PREFS, ...saved, hidden };
   } catch {
-    return { hidden: [], hideOrphans: true };
+    return DEFAULT_PREFS;
   }
 }
 
+const hiddenKey = (colorBy: ColorBy, field: string) => (colorBy === "prop" ? `prop:${field}` : colorBy);
+
 const idOf = (end: Edge["source"]): string => (typeof end === "object" ? String(end.id) : String(end));
+
+function subFolder(path: string): string {
+  const parts = path.split("/");
+  return parts.length === 1 ? topFolder(path) : parts.slice(0, Math.min(2, parts.length - 1)).join("/");
+}
+
+function valueGroup(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (Array.isArray(value)) return value.length ? valueGroup(value[0]) : null;
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+/** First index whose value is greater than `value`, in an ascending list. */
+function upperBound(sorted: number[], value: number): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid]! <= value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
 
 function useSize<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -78,8 +132,17 @@ function useTheme() {
   }, [revision]);
 }
 
+// Reused by every frame's label pass, so placing labels allocates nothing.
+const labelBoxes = new Float64Array(MAX_LABELS * 4);
+
+function Dot({ color, className }: { color: string; className?: string }) {
+  return <span className={clsx("inline-block size-2 shrink-0 rounded-full", className)} style={{ background: color }} />;
+}
+
 export function GraphPage() {
   const { data, isLoading } = useGraph();
+  const { data: notes } = useNotes();
+  const { data: info } = useInfo();
   const [, navigate] = useLocation();
   const params = new URLSearchParams(useSearch());
   const focus = params.get("focus");
@@ -87,17 +150,28 @@ export function GraphPage() {
 
   const { ref: wrapRef, size } = useSize<HTMLDivElement>();
   const theme = useTheme();
-  const colorFor = useFolderColor();
+  const folderColor = useFolderColor();
+  const palette = FOLDER_PALETTES[useUi().preferences.folderPalette];
   const graphRef = useRef<ForceGraphMethods<Node, Edge>>(undefined);
   const fitted = useRef(false);
+  const nodeCache = useRef<{ scope: string; nodes: Map<string, Node> }>({ scope: "", nodes: new Map() });
+  const clusterState = useRef<{ on: boolean; data: unknown } | null>(null);
+  const pinned = useRef<Node[]>([]);
 
   const [prefs, setPrefs] = useState(loadPrefs);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const [hoverGroup, setHoverGroup] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [panelOpen, setPanelOpen] = useState(true);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [cutoff, setCutoff] = useState<number | null>(null);
 
   useEffect(() => localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)), [prefs]);
+
+  const propMode = prefs.colorBy === "prop";
+  // Frontmatter is most of the table's size, so it loads only once a property colours the graph.
+  const { data: table, isLoading: tableLoading } = useQuery({ queryKey: keys.table, queryFn: () => api.table(), staleTime: Infinity, enabled: propMode });
 
   const adjacency = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -112,8 +186,9 @@ export function GraphPage() {
   const focusTitle = focus ? data?.nodes.find((n) => n.id === focus)?.title : undefined;
   const localMode = Boolean(focus && focusTitle !== undefined);
 
+  // Node objects are reused by id within one scope, so a refetch keeps every laid-out node where it is.
   const graphData = useMemo(() => {
-    if (!data) return { nodes: [] as Node[], links: [] as Edge[] };
+    if (!data) return { nodes: [] as Node[], links: [] as Edge[], fresh: true };
     let scope: Set<string> | null = null;
     if (focus && localMode) {
       scope = new Set([focus]);
@@ -124,28 +199,114 @@ export function GraphPage() {
         frontier = next;
       }
     }
+    const scopeKey = localMode ? `${focus}\n${depth}` : "";
+    const previous = nodeCache.current.scope === scopeKey ? nodeCache.current.nodes : new Map<string, Node>();
+    let fresh = true;
+    for (const node of previous.values()) {
+      if (node.x !== undefined) fresh = false;
+      break;
+    }
+    const reused: Node[] = [];
     const nodes: Node[] = data.nodes
       .filter((n) => !scope || scope.has(n.id))
       .map((n) => {
-        const group = topFolder(n.id);
-        return { id: n.id, title: n.title, group, degree: n.degree, radius: 2.2 + Math.sqrt(n.degree) * 1.5 };
+        const fields = {
+          title: n.title,
+          label: n.title.length > 42 ? `${n.title.slice(0, 40)}…` : n.title,
+          degree: n.degree,
+          radius: 2.2 + Math.sqrt(n.degree) * 1.5,
+        };
+        const old = previous.get(n.id);
+        if (old) {
+          // Held in place while the reheated simulation settles the changed part; released when it stops.
+          if (!fresh) (old.fx = old.x, old.fy = old.y, reused.push(old));
+          return Object.assign(old, fields);
+        }
+        const node: Node = { id: n.id, ...fields };
+        // A note added to a laid-out graph starts beside a neighbour instead of at the origin.
+        for (const other of adjacency.get(n.id) ?? []) {
+          const anchor = previous.get(other);
+          if (anchor?.x === undefined || anchor.y === undefined) continue;
+          node.x = anchor.x + (Math.random() - 0.5) * 20;
+          node.y = anchor.y + (Math.random() - 0.5) * 20;
+          break;
+        }
+        return node;
       });
+    nodeCache.current = { scope: scopeKey, nodes: new Map(nodes.map((n) => [n.id, n])) };
+    pinned.current = reused;
     const links: Edge[] = data.links.filter((l) => !scope || (scope.has(l.source) && scope.has(l.target))).map((l) => ({ source: l.source, target: l.target }));
-    return { nodes, links };
+    return { nodes, links, fresh };
   }, [data, adjacency, focus, localMode, depth]);
 
   const byId = useMemo(() => new Map(graphData.nodes.map((n) => [n.id, n])), [graphData]);
 
-  const folders = useMemo(() => {
+  const fieldOptions = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const n of graphData.nodes) counts.set(n.group, (counts.get(n.group) ?? 0) + 1);
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [graphData]);
+    for (const row of table ?? []) for (const key of Object.keys(row.frontmatter ?? {})) counts.set(key, (counts.get(key) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [table]);
+  const configFields = info?.config.fields;
+  const field =
+    prefs.field ||
+    (configFields && fieldOptions.find(([key]) => configFields[key]?.colors)?.[0]) ||
+    fieldOptions[0]?.[0] ||
+    "";
 
-  const hidden = useMemo(() => new Set(prefs.hidden), [prefs.hidden]);
+  const groupOf = useMemo(() => {
+    const map = new Map<string, string>();
+    if (prefs.colorBy === "prop") {
+      const frontmatter = new Map((table ?? []).map((row) => [row.path, row.frontmatter]));
+      for (const n of graphData.nodes) map.set(n.id, valueGroup(frontmatter.get(n.id)?.[field]) ?? NONE_GROUP);
+    } else {
+      const group = prefs.colorBy === "sub" ? subFolder : topFolder;
+      for (const n of graphData.nodes) map.set(n.id, group(n.id));
+    }
+    return map;
+  }, [graphData, prefs.colorBy, table, field]);
+
+  const groups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const g of groupOf.values()) counts.set(g, (counts.get(g) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => Number(a[0] === NONE_GROUP) - Number(b[0] === NONE_GROUP) || b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [groupOf]);
+
+  const groupColor = useMemo(() => {
+    const map = new Map<string, string>();
+    if (prefs.colorBy === "top") {
+      for (const [group] of groups) map.set(group, folderColor(group));
+      return map;
+    }
+    const configured = prefs.colorBy === "prop" ? configFields?.[field]?.colors : undefined;
+    const resolve = (color: string) => (Object.hasOwn(PRESET_INDEX, color) ? palette[PRESET_INDEX[color as Tone]]! : color);
+    const taken = new Set(Object.values(configured ?? {}).map(resolve));
+    // Unconfigured values skip the configured colours while any are left, so they do not read as a configured value.
+    const free = palette.filter((c) => !taken.has(c));
+    const cycle = free.length ? free : palette;
+    let next = 0;
+    for (const [group] of groups) {
+      const color = group === NONE_GROUP ? NONE_COLOR : configured?.[group];
+      map.set(group, color ? resolve(color) : cycle[next++ % cycle.length]!);
+    }
+    return map;
+  }, [groups, prefs.colorBy, folderColor, configFields, field, palette]);
+
+  const colorOf = useCallback((id: string) => groupColor.get(groupOf.get(id) ?? "") ?? NONE_COLOR, [groupColor, groupOf]);
+
+  const mtimeOf = useMemo(() => new Map((notes ?? []).map((n) => [n.path, n.mtime])), [notes]);
+  const modeKey = hiddenKey(prefs.colorBy, field);
+  const hiddenList = prefs.hidden[modeKey] ?? [];
+  const hidden = useMemo(() => new Set(prefs.hidden[modeKey]), [prefs.hidden, modeKey]);
+  const setHidden = (update: (list: string[]) => string[]) =>
+    setPrefs((p) => ({ ...p, hidden: { ...p.hidden, [modeKey]: update(p.hidden[modeKey] ?? []) } }));
+
+  const isShown = useCallback(
+    (n: Node) => n.id === focus || (!hidden.has(groupOf.get(n.id) ?? "") && !(prefs.hideOrphans && n.degree === 0)),
+    [focus, hidden, groupOf, prefs.hideOrphans],
+  );
   const isVisible = useCallback(
-    (n: Node) => n.id === focus || (!hidden.has(n.group) && !(prefs.hideOrphans && n.degree === 0)),
-    [focus, hidden, prefs.hideOrphans],
+    (n: Node) => isShown(n) && (cutoff === null || n.id === focus || (mtimeOf.get(n.id) ?? 0) <= cutoff),
+    [isShown, cutoff, focus, mtimeOf],
   );
   const linkVisible = useCallback(
     (l: Edge) => {
@@ -156,26 +317,108 @@ export function GraphPage() {
     [byId, isVisible],
   );
 
+  const times = useMemo(
+    () => graphData.nodes.filter(isShown).map((n) => mtimeOf.get(n.id) ?? 0).sort((a, b) => a - b),
+    [graphData, isShown, mtimeOf],
+  );
+
   const visibleNodes = useMemo(() => graphData.nodes.filter(isVisible), [graphData, isVisible]);
   const visibleLinks = useMemo(() => graphData.links.filter(linkVisible).length, [graphData, linkVisible]);
   const orphanCount = useMemo(() => graphData.nodes.filter((n) => n.degree === 0).length, [graphData]);
 
   const activeId = hoverId ?? selectedId;
   const ringId = activeId ?? (localMode ? focus : null);
-  const lit = useMemo(() => (activeId ? new Set([activeId, ...(adjacency.get(activeId) ?? [])]) : null), [activeId, adjacency]);
+  const litGroup = activeId || !hoverGroup || hidden.has(hoverGroup) ? null : hoverGroup;
+  const lit = useMemo(() => {
+    if (activeId) return new Set([activeId, ...(adjacency.get(activeId) ?? [])]);
+    if (!litGroup) return null;
+    return new Set(graphData.nodes.filter((n) => groupOf.get(n.id) === litGroup).map((n) => n.id));
+  }, [activeId, adjacency, litGroup, graphData, groupOf]);
 
   const byDegree = useMemo(() => [...visibleNodes].sort((a, b) => b.degree - a.degree), [visibleNodes]);
+  const labelPool = useMemo(() => {
+    if (!lit) return byDegree;
+    const pool = byDegree.filter((n) => lit.has(n.id));
+    if (activeId) pool.sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId));
+    return pool;
+  }, [byDegree, lit, activeId]);
+
+  // Group anchors ignore the time filter, so scrubbing through time never moves the clusters.
+  const anchors = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const n of graphData.nodes) {
+      if (!isShown(n)) continue;
+      const g = groupOf.get(n.id) ?? "";
+      counts.set(g, (counts.get(g) ?? 0) + 1);
+    }
+    const map = new Map<string, [number, number]>();
+    let area = 0;
+    [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([group, count], i) => {
+        const r = i === 0 ? 0 : CLUSTER_SPACING * (Math.sqrt(area) + Math.sqrt(count));
+        map.set(group, [r * Math.cos(i * GOLDEN_ANGLE), r * Math.sin(i * GOLDEN_ANGLE)]);
+        area += count;
+      });
+    return map;
+  }, [graphData, groupOf, isShown]);
 
   const ready = size !== null && graphData.nodes.length > 0;
   useEffect(() => {
-    fitted.current = false;
+    if (graphData.fresh) fitted.current = false;
     const fg = graphRef.current;
     if (!fg) return;
-    fg.d3Force("charge")?.strength(-42).distanceMax(360);
+    // A capped charge range under a pull towards the group anchors leaves nodes stacked in rings at the cap.
+    fg.d3Force("charge")?.strength(-42).distanceMax(prefs.cluster ? Infinity : 360);
     fg.d3Force("link")?.distance(localMode ? 60 : 34);
-  }, [graphData, localMode, ready]);
+  }, [graphData, localMode, ready, prefs.cluster]);
+
+  const releasePins = useCallback(() => {
+    for (const node of pinned.current) (node.fx = undefined, node.fy = undefined);
+    pinned.current = [];
+  }, []);
+
+  useEffect(() => {
+    const fg = graphRef.current;
+    if (!fg) return;
+    const previous = clusterState.current;
+    clusterState.current = { on: prefs.cluster, data: graphData };
+    if (!prefs.cluster && !previous?.on) return;
+    // New graph data already reheats the simulation, and doing it again would release the held nodes too early.
+    const reheat = () => {
+      if (previous && previous.data !== graphData) return;
+      releasePins();
+      fg.d3ReheatSimulation();
+    };
+    // Same as d3's default link strength, so turning grouping off restores the usual layout.
+    const linkStrength = (l: Edge) => 1 / Math.max(1, Math.min(byId.get(idOf(l.source))?.degree ?? 1, byId.get(idOf(l.target))?.degree ?? 1));
+    if (!prefs.cluster) {
+      fg.d3Force("cluster", null);
+      fg.d3Force("link")?.strength(linkStrength);
+      reheat();
+      return;
+    }
+    let nodes: Node[] = [];
+    const force = Object.assign(
+      (alpha: number) => {
+        const k = CLUSTER_STRENGTH * alpha;
+        for (const node of nodes) {
+          const anchor = anchors.get(groupOf.get(node.id) ?? "");
+          if (!anchor || node.x === undefined || node.y === undefined) continue;
+          node.vx = (node.vx ?? 0) + (anchor[0] - node.x) * k;
+          node.vy = (node.vy ?? 0) + (anchor[1] - node.y) * k;
+        }
+      },
+      { initialize: (all: Node[]) => void (nodes = all) },
+    );
+    fg.d3Force("cluster", force);
+    // Links across groups would drag every cluster into the hubs, so they pull far less while grouping.
+    fg.d3Force("link")?.strength((l: Edge) => linkStrength(l) * (groupOf.get(idOf(l.source)) === groupOf.get(idOf(l.target)) ? 1 : CROSS_LINK_FACTOR));
+    reheat();
+  }, [prefs.cluster, anchors, groupOf, byId, graphData, ready, releasePins]);
 
   useEffect(() => setSelectedId(null), [focus]);
+  useEffect(() => setLegendOpen(false), [modeKey]);
 
   const paintNode = useCallback(
     (node: Node, ctx: CanvasRenderingContext2D, scale: number) => {
@@ -183,7 +426,7 @@ export function GraphPage() {
       ctx.globalAlpha = on ? 1 : 0.14;
       ctx.beginPath();
       ctx.arc(node.x ?? 0, node.y ?? 0, node.radius, 0, 2 * Math.PI);
-      ctx.fillStyle = colorFor(node.group);
+      ctx.fillStyle = colorOf(node.id);
       ctx.fill();
       if (node.id === ringId) {
         ctx.lineWidth = 2 / scale;
@@ -192,58 +435,75 @@ export function GraphPage() {
       }
       ctx.globalAlpha = 1;
     },
-    [colorFor, lit, ringId, theme],
+    [colorOf, lit, ringId, theme],
   );
 
   // Greedy placement: the most connected labels win and overlapping ones are skipped, so text never piles up.
   const paintLabels = useCallback(
     (ctx: CanvasRenderingContext2D, scale: number) => {
-      let candidates: Node[];
-      if (lit) {
-        candidates = [...lit].map((id) => byId.get(id)).filter((n): n is Node => n !== undefined && isVisible(n));
-        candidates.sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId) || b.degree - a.degree);
-      } else if (scale >= LABEL_ZOOM || byDegree.length <= ALWAYS_LABEL_BELOW) {
-        const t = ctx.getTransform();
-        const [x0, x1, y0, y1] = [-t.e / t.a, (ctx.canvas.width - t.e) / t.a, -t.f / t.d, (ctx.canvas.height - t.f) / t.d];
-        candidates = byDegree.filter((n) => n.x !== undefined && n.y !== undefined && n.x >= x0 && n.x <= x1 && n.y >= y0 && n.y <= y1);
-        if (ringId) {
-          const ring = byId.get(ringId);
-          if (ring) candidates.unshift(ring);
-        }
-      } else {
-        return;
-      }
+      // A hovered or selected note labels its neighbours at any zoom; otherwise labels wait for zoom and stay on screen.
+      const anywhere = activeId !== null;
+      if (!anywhere && scale < LABEL_ZOOM && labelPool.length > ALWAYS_LABEL_BELOW) return;
+      const t = ctx.getTransform();
+      const x0 = -t.e / t.a;
+      const x1 = (ctx.canvas.width - t.e) / t.a;
+      const y0 = -t.f / t.d;
+      const y1 = (ctx.canvas.height - t.f) / t.d;
       const size = 11.5 / scale;
       const pad = 3 / scale;
-      const placed: [number, number, number, number][] = [];
+      const regular = `500 ${size}${LABEL_FONT}`;
+      const bold = `600 ${size}${LABEL_FONT}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.lineJoin = "round";
       ctx.lineWidth = 3.5 / scale;
-      for (const node of candidates.slice(0, MAX_LABELS)) {
-        if (node.x === undefined || node.y === undefined) continue;
-        const text = node.title.length > 42 ? `${node.title.slice(0, 40)}…` : node.title;
-        ctx.font = `${node.id === ringId ? 600 : 500} ${size}px "Inter Variable", system-ui, sans-serif`;
-        const width = ctx.measureText(text).width;
-        const top = node.y + node.radius + 2.5 / scale;
-        const box: [number, number, number, number] = [node.x - width / 2 - pad, top - pad, node.x + width / 2 + pad, top + size * 1.2 + pad];
-        if (node.id !== ringId && placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
-        placed.push(box);
-        ctx.strokeStyle = theme.halo;
-        ctx.strokeText(text, node.x, top);
-        ctx.fillStyle = theme.ink;
-        ctx.fillText(text, node.x, top);
+      ctx.strokeStyle = theme.halo;
+      ctx.fillStyle = theme.ink;
+      const ring = ringId && !anywhere ? byId.get(ringId) : undefined;
+      let placed = 0;
+      let tried = 0;
+      for (let i = ring ? -1 : 0; i < labelPool.length && tried < MAX_LABELS; i++) {
+        const node = i === -1 ? ring! : labelPool[i]!;
+        if (i >= 0 && node === ring) continue;
+        const { x, y } = node;
+        if (x === undefined || y === undefined) continue;
+        if (!anywhere && (x < x0 || x > x1 || y < y0 || y > y1) && node !== ring) continue;
+        tried++;
+        const strong = node.id === ringId;
+        ctx.font = strong ? bold : regular;
+        const half = ctx.measureText(node.label).width / 2 + pad;
+        const top = y + node.radius + 2.5 / scale;
+        const left = x - half;
+        const right = x + half;
+        const boxTop = top - pad;
+        const boxBottom = top + size * 1.2 + pad;
+        let overlaps = false;
+        for (let b = 0; b < placed * 4 && !strong; b += 4) {
+          if (left < labelBoxes[b + 2]! && right > labelBoxes[b]! && boxTop < labelBoxes[b + 3]! && boxBottom > labelBoxes[b + 1]!) {
+            overlaps = true;
+            break;
+          }
+        }
+        if (overlaps) continue;
+        const at = placed++ * 4;
+        labelBoxes[at] = left;
+        labelBoxes[at + 1] = boxTop;
+        labelBoxes[at + 2] = right;
+        labelBoxes[at + 3] = boxBottom;
+        ctx.strokeText(node.label, x, top);
+        ctx.fillText(node.label, x, top);
       }
     },
-    [lit, byId, byDegree, isVisible, activeId, ringId, theme],
+    [labelPool, byId, activeId, ringId, theme],
   );
 
   const linkColor = useCallback(
     (l: Edge) => {
-      if (!activeId) return theme.link;
-      return idOf(l.source) === activeId || idOf(l.target) === activeId ? theme.accent : theme.linkDim;
+      if (activeId) return idOf(l.source) === activeId || idOf(l.target) === activeId ? theme.accent : theme.linkDim;
+      if (litGroup) return groupOf.get(idOf(l.source)) === litGroup && groupOf.get(idOf(l.target)) === litGroup ? theme.link : theme.linkDim;
+      return theme.link;
     },
-    [activeId, theme],
+    [activeId, litGroup, groupOf, theme],
   );
   const linkWidth = useCallback((l: Edge) => (activeId && (idOf(l.source) === activeId || idOf(l.target) === activeId) ? 1.4 : 0.6), [activeId]);
 
@@ -252,7 +512,9 @@ export function GraphPage() {
   const focusNode = (id: string) => {
     const node = byId.get(id);
     if (!node) return;
-    if (hidden.has(node.group)) setPrefs((p) => ({ ...p, hidden: p.hidden.filter((g) => g !== node.group) }));
+    const group = groupOf.get(id) ?? "";
+    if (hidden.has(group)) setHidden((list) => list.filter((g) => g !== group));
+    if (cutoff !== null && (mtimeOf.get(id) ?? 0) > cutoff) setCutoff(null);
     setSelectedId(id);
     setQuery("");
     if (node.x !== undefined && node.y !== undefined) {
@@ -270,10 +532,20 @@ export function GraphPage() {
       .slice(0, 8);
   }, [query, graphData]);
 
-  const toggleFolder = (group: string) =>
-    setPrefs((p) => ({ ...p, hidden: p.hidden.includes(group) ? p.hidden.filter((g) => g !== group) : [...p.hidden, group] }));
+  const toggleGroup = (group: string, only: boolean) =>
+    setHidden((list) => {
+      if (only) return groups.map(([g]) => g).filter((g) => g !== group);
+      return list.includes(group) ? list.filter((g) => g !== group) : [...list, group];
+    });
 
+  const setColorBy = (colorBy: ColorBy) => {
+    setHoverGroup(null);
+    setPrefs((p) => ({ ...p, colorBy }));
+  };
+
+  const timeIndex = cutoff === null ? times.length : upperBound(times, cutoff);
   const hovered = hoverId ? byId.get(hoverId) : undefined;
+  const legend = legendOpen ? groups : groups.slice(0, LEGEND_LIMIT);
 
   return (
     <div ref={wrapRef} className="relative h-full overflow-hidden bg-canvas">
@@ -301,13 +573,14 @@ export function GraphPage() {
             onRenderFramePost={paintLabels}
             linkColor={linkColor}
             linkWidth={linkWidth}
-            warmupTicks={40}
+            warmupTicks={graphData.fresh ? 40 : 0}
             cooldownTicks={150}
             d3AlphaDecay={0.035}
             d3VelocityDecay={0.32}
             minZoom={0.15}
             maxZoom={12}
             onEngineStop={() => {
+              releasePins();
               if (fitted.current) return;
               fitted.current = true;
               fit();
@@ -389,7 +662,7 @@ export function GraphPage() {
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition hover:bg-sunken"
                     title={n.id}
                   >
-                    <FolderDot folder={n.group} />
+                    <Dot color={colorOf(n.id)} />
                     <span className="min-w-0 flex-1 truncate text-ink">{n.title}</span>
                     <span className="font-mono text-[10.5px] text-ink-faint">{n.degree}</span>
                   </button>
@@ -416,34 +689,124 @@ export function GraphPage() {
             </button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-1">
+          <div className="border-b border-line px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Color by</span>
+              <button
+                type="button"
+                onClick={() => setPrefs((p) => ({ ...p, cluster: !p.cluster }))}
+                className={clsx(
+                  "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] transition hover:bg-sunken hover:text-ink",
+                  prefs.cluster ? "text-accent-ink" : "text-ink-faint",
+                )}
+                title={prefs.cluster ? "Stop pulling groups together" : "Pull each color group together"}
+                aria-pressed={prefs.cluster}
+              >
+                <Boxes size={12.5} />
+                Group
+              </button>
+            </div>
+            <div role="radiogroup" aria-label="Color by" className="mt-2 grid grid-cols-3 gap-0.5 rounded-lg bg-sunken p-0.5">
+              {COLOR_MODES.map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={prefs.colorBy === mode}
+                  onClick={() => setColorBy(mode)}
+                  className={clsx(
+                    "h-6 rounded-md text-[12px] transition",
+                    prefs.colorBy === mode ? "bg-surface font-medium text-ink shadow-sm" : "text-ink-soft hover:text-ink",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {propMode && (
+              <select
+                value={field}
+                onChange={(e) => setPrefs((p) => ({ ...p, field: e.target.value }))}
+                disabled={fieldOptions.length === 0}
+                aria-label="Property"
+                className="mt-2 h-7 w-full rounded-lg border border-line-strong bg-surface px-2 text-[12.5px] text-ink outline-none focus:ring-1 focus:ring-accent/50"
+              >
+                {fieldOptions.length === 0 && <option value="">{tableLoading ? "Loading properties…" : "No properties"}</option>}
+                {fieldOptions.map(([key, count]) => (
+                  <option key={key} value={key}>{`${key} (${count.toLocaleString()})`}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-1" onMouseLeave={() => setHoverGroup(null)}>
             <div className="flex items-center justify-between px-2 pb-1 pt-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint">Folders</span>
-              {prefs.hidden.length > 0 && (
-                <button type="button" onClick={() => setPrefs((p) => ({ ...p, hidden: [] }))} className="text-[11.5px] text-accent-ink hover:underline">
+              <span className="truncate text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
+                {prefs.colorBy === "top" ? "Folders" : prefs.colorBy === "sub" ? "Subfolders" : field || "Values"}
+              </span>
+              {hiddenList.length > 0 && (
+                <button type="button" onClick={() => setHidden(() => [])} className="shrink-0 text-[11.5px] text-accent-ink hover:underline">
                   Show all
                 </button>
               )}
             </div>
-            {folders.map(([group, count]) => {
-              const off = hidden.has(group);
-              return (
-                <button
-                  key={group}
-                  type="button"
-                  onClick={() => toggleFolder(group)}
-                  className={clsx("flex h-7 w-full items-center gap-2 rounded-md px-2 text-left transition hover:bg-sunken", off && "opacity-45")}
-                  title={off ? `Show ${group}` : `Hide ${group}`}
-                >
-                  <FolderDot folder={group} className={clsx(off && "!bg-transparent ring-1 ring-ink-faint")} />
-                  <span className={clsx("min-w-0 flex-1 truncate", off ? "text-ink-faint line-through" : "text-ink-soft")}>{group}</span>
-                  <span className="font-mono text-[10.5px] text-ink-faint">{count.toLocaleString()}</span>
-                </button>
-              );
-            })}
+            {propMode && tableLoading ? (
+              <div className="flex justify-center py-3 text-ink-faint">
+                <Spinner />
+              </div>
+            ) : (
+              legend.map(([group, count]) => {
+                const off = hidden.has(group);
+                return (
+                  <button
+                    key={group}
+                    type="button"
+                    onClick={(e) => toggleGroup(group, e.shiftKey)}
+                    onMouseEnter={() => setHoverGroup(off ? null : group)}
+                    className={clsx("flex h-7 w-full items-center gap-2 rounded-md px-2 text-left transition hover:bg-sunken", off && "opacity-45")}
+                    title={`${off ? `Show ${group}` : `Hide ${group}`}. Shift-click to show only this.`}
+                  >
+                    <Dot color={groupColor.get(group) ?? NONE_COLOR} className={clsx(off && "!bg-transparent ring-1 ring-ink-faint")} />
+                    <span className={clsx("min-w-0 flex-1 truncate", off ? "text-ink-faint line-through" : "text-ink-soft")}>{group}</span>
+                    <span className="font-mono text-[10.5px] text-ink-faint">{count.toLocaleString()}</span>
+                  </button>
+                );
+              })
+            )}
+            {groups.length > LEGEND_LIMIT && !(propMode && tableLoading) && (
+              <button type="button" onClick={() => setLegendOpen((o) => !o)} className="h-7 w-full rounded-md px-2 text-left text-[12px] text-accent-ink hover:bg-sunken">
+                {legendOpen ? "Show fewer" : `+${(groups.length - LEGEND_LIMIT).toLocaleString()} more`}
+              </button>
+            )}
           </div>
           <div className="border-t border-line px-3 py-2 text-[11.5px] leading-snug text-ink-faint">Click a note to open it. Right-click for its local graph.</div>
         </aside>
+      )}
+
+      {times.length > 1 && (
+        <div className="absolute bottom-3 left-1/2 z-10 flex w-[min(440px,calc(100%-7rem))] -translate-x-1/2 items-center gap-2.5 rounded-lg border border-line bg-surface/90 px-3 py-1.5 shadow-sm backdrop-blur-md">
+          <History size={14} className="shrink-0 text-ink-faint" />
+          <input
+            type="range"
+            min={1}
+            max={times.length}
+            value={timeIndex}
+            onChange={(e) => {
+              const i = Number(e.target.value);
+              setCutoff(i >= times.length ? null : times[i - 1]!);
+            }}
+            aria-label="Show notes modified up to"
+            className="min-w-0 flex-1 accent-accent"
+          />
+          <span className="shrink-0 text-[11.5px] tabular-nums text-ink-faint">
+            {cutoff === null ? "Now" : formatDate(cutoff)} · {timeIndex.toLocaleString()} notes
+          </span>
+          {cutoff !== null && (
+            <button type="button" onClick={() => setCutoff(null)} className="shrink-0 text-[11.5px] text-accent-ink hover:underline">
+              Now
+            </button>
+          )}
+        </div>
       )}
 
       {graphData.nodes.length > 0 && (
@@ -460,10 +823,10 @@ export function GraphPage() {
       )}
 
       {hovered && (
-        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 max-w-[420px] -translate-x-1/2 rounded-lg border border-line bg-surface/95 px-3 py-2 shadow-sm backdrop-blur-md">
+        <div className="pointer-events-none absolute bottom-16 left-1/2 z-10 max-w-[420px] -translate-x-1/2 rounded-lg border border-line bg-surface/95 px-3 py-2 shadow-sm backdrop-blur-md">
           <div className="truncate text-[13px] font-medium text-ink">{hovered.title}</div>
           <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-faint">
-            <FolderDot folder={hovered.group} className="size-1.5" />
+            <Dot color={colorOf(hovered.id)} className="size-1.5" />
             <span className="truncate font-mono">{hovered.id}</span>
             <span className="shrink-0">· {hovered.degree} links</span>
           </div>

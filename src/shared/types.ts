@@ -36,6 +36,8 @@ export interface OutgoingLink {
   kind: "markdown" | "wiki";
   status: LinkStatus;
   target: string | null;
+  /** Other notes an ambiguous wiki link could mean. */
+  alternatives?: string[];
 }
 
 export interface Backlink {
@@ -73,12 +75,96 @@ export interface SearchHit {
   snippet: string;
 }
 
+export interface DeadLink {
+  from: string;
+  line: number;
+  raw: string;
+  kind: "markdown" | "wiki";
+  /** A replacement for `raw` that resolves, when one is likely: a `../` level off, a unique file name, or a close title. */
+  fix: { raw: string; target: string; reason: string } | null;
+}
+
 export interface HealthReport {
-  deadLinks: { from: string; line: number; raw: string }[];
+  deadLinks: DeadLink[];
+  /** Wiki links whose name matches more than one note. */
+  ambiguousLinks: { from: string; line: number; raw: string; target: string; alternatives: string[] }[];
+  /** Notes nothing links to, not even through a linked index note of a folder above them. */
   orphans: string[];
+  /** Notes with no direct link that sit under a folder whose index note (such as README.md) is linked. */
+  reachedThroughFolder: string[];
   duplicateTitles: { title: string; paths: string[] }[];
   frontmatterErrors: { path: string; error: string }[];
   emptyNotes: string[];
+  schemaIssues: { path: string; key: string; problem: string }[];
+}
+
+export interface FixLinkRequest {
+  path: string;
+  line: number;
+  raw: string;
+  replacement: string;
+  baseHash: string;
+}
+
+export interface MoveRequest {
+  from: string;
+  to: string;
+}
+
+export interface MoveResponse {
+  path: string;
+  /** Other notes whose links were rewritten to follow the move. */
+  updated: string[];
+}
+
+export interface DeleteResponse {
+  trashId: string;
+  /** Notes that still link to the deleted note. */
+  linkedFrom: string[];
+}
+
+export interface Template {
+  path: string;
+  title: string;
+}
+
+export interface CreateRequest {
+  path: string;
+  content?: string;
+  /** Vault path of a template note; its `{{title}}`, `{{date}}`, `{{time}}` and `{{path}}` are filled in. */
+  template?: string;
+  title?: string;
+}
+
+export interface HistoryEntry {
+  rev: string;
+  date: number;
+  author: string;
+  subject: string;
+  /** The note's path at this commit, which differs after a rename. */
+  path: string;
+}
+
+export interface RelatedNote {
+  path: string;
+  title: string;
+  folder: string;
+  reason: string;
+}
+
+export interface TagStat {
+  tag: string;
+  count: number;
+  paths: string[];
+}
+
+export interface TimelineEntry {
+  path: string;
+  title: string;
+  folder: string;
+  date: number;
+  /** "modified" for the file time, otherwise the frontmatter key the date came from. */
+  source: string;
 }
 
 export interface FolderStat {
@@ -103,11 +189,42 @@ export interface Overview {
   totals: { notes: number; words: number; links: number; deadLinks: number };
 }
 
+export type FieldKind = "text" | "enum" | "steps" | "date" | "list" | "number" | "boolean" | "link";
+
+export interface FieldSchema {
+  kind?: FieldKind;
+  label?: string;
+  /** Allowed values for an enum, or the step order for a steps field. */
+  values?: string[];
+  /** Badge colour per enum value: a CSS colour or one of the preset names. */
+  colors?: Record<string, string>;
+}
+
+/** `.brainview.json` at the folder root. Every part is optional. */
+export interface BrainConfig {
+  fields: Record<string, FieldSchema>;
+  /** Required keys for notes whose frontmatter `type` has this value. "*" applies to every note with frontmatter. */
+  required: Record<string, string[]>;
+  /** File names (without extension) that act as a folder's index note. */
+  indexNames: string[];
+  templatesFolder: string;
+  dailyFolder: string;
+  /** Daily note name pattern with YYYY, MM and DD. */
+  dailyFormat: string;
+  dailyTemplate: string | null;
+  /** Problems reading the config file, shown in Health. */
+  errors: string[];
+}
+
 export interface VaultInfo {
   name: string;
   root: string;
   noteCount: number;
   readOnly: boolean;
+  /** True in an exported static site: no writes, no AI, no live updates. */
+  static?: boolean;
+  config: BrainConfig;
+  git: boolean;
   ai: AiStatus;
   /** Folders outside the vault that were allowed with --allow, served read-only under /mounts/<name>/. */
   mounts: Mount[];
@@ -132,7 +249,8 @@ export interface AiStatus {
 }
 
 export type VaultEvent =
-  | { type: "changed"; paths: string[] }
+  /** `links` is true when links, titles or the set of notes changed, so the graph and health need a refetch. */
+  | { type: "changed"; paths: string[]; links: boolean }
   | { type: "ready" };
 
 export interface SaveRequest {
@@ -161,6 +279,18 @@ export interface AskRequest {
   question: string;
   history: ChatTurn[];
   contextPath: string | null;
+  /**
+   * The notes attached to each earlier user turn, one list per turn in `history`. Follow-ups resend them in the same
+   * places, so they stay available to the answer and the request prefix stays cached.
+   */
+  previousSources?: string[][];
+}
+
+export interface AiUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }
 
 export interface AskSource {
@@ -180,7 +310,7 @@ export type AskEvent =
   | { type: "block" }
   | { type: "text"; text: string }
   | { type: "citation"; citation: AskCitation }
-  | { type: "done"; stopReason: string | null }
+  | { type: "done"; stopReason: string | null; usage?: AiUsage }
   | { type: "error"; message: string };
 
 export type AssistAction = "improve" | "shorten" | "expand" | "fix" | "summarize" | "continue" | "custom";
@@ -199,4 +329,5 @@ export interface Suggestions {
   tags: string[];
   related: { path: string; title: string; reason: string }[];
   frontmatter: { key: string; value: string; reason: string }[];
+  usage?: AiUsage;
 }

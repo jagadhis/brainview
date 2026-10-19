@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Route, Switch } from "wouter";
 import { AskPanel } from "./components/AskPanel.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
+import { NoteDialogs } from "./components/NoteDialogs.tsx";
 import { SettingsPanel } from "./components/SettingsPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { Button, Spinner } from "./components/ui.tsx";
@@ -15,6 +16,8 @@ import { OverviewPage } from "./pages/OverviewPage.tsx";
 const GraphPage = lazy(() => import("./pages/GraphPage.tsx").then((m) => ({ default: m.GraphPage })));
 const TablePage = lazy(() => import("./pages/TablePage.tsx").then((m) => ({ default: m.TablePage })));
 const HealthPage = lazy(() => import("./pages/HealthPage.tsx").then((m) => ({ default: m.HealthPage })));
+const TagsPage = lazy(() => import("./pages/TagsPage.tsx").then((m) => ({ default: m.TagsPage })));
+const TimelinePage = lazy(() => import("./pages/TimelinePage.tsx").then((m) => ({ default: m.TimelinePage })));
 
 export function App() {
   const { setPaletteOpen, paletteOpen, askOpen, setAskOpen, dark, toggleDark, setSettingsOpen, sidebarOpen, setSidebarOpen } = useUi();
@@ -78,6 +81,9 @@ export function App() {
               <Route path="/graph" component={GraphPage} />
               <Route path="/table" component={TablePage} />
               <Route path="/health" component={HealthPage} />
+              <Route path="/tags">{() => <TagsPage />}</Route>
+              <Route path="/tags/*">{(params) => <TagsPage routeTag={params["*"]} />}</Route>
+              <Route path="/timeline" component={TimelinePage} />
               <Route path="/artifact/*">{(params) => <ArtifactPage routePath={params["*"]} />}</Route>
               <Route path="/note/*">{(params) => <NotePage routePath={params["*"]} onAsk={ask} />}</Route>
               <Route>
@@ -90,6 +96,7 @@ export function App() {
       {askOpen && <AskPanel seed={askSeed} onClose={() => setAskOpen(false)} />}
       <CommandPalette onAsk={ask} />
       <SettingsPanel />
+      <NoteDialogs />
     </div>
   );
 }

@@ -1,12 +1,13 @@
 import { ChevronRight, Copy, FilePlus2, FileQuestion, Lock, PencilLine, Sparkles } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import { basename, isNotePath, stripExtension } from "../../../src/shared/paths.ts";
 import type { NoteDetail } from "../../../src/shared/types.ts";
 import { Markdown } from "../components/Markdown.tsx";
+import { NoteActions } from "../components/NoteActions.tsx";
 import { PropertiesCard } from "../components/Properties.tsx";
 import { RightRail } from "../components/RightRail.tsx";
-import { Button, Chip, Empty, FolderDot, Spinner, StatusBadge } from "../components/ui.tsx";
+import { Button, Chip, clsx, Empty, FolderDot, Spinner, StatusBadge } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { isHeaderStatus, topFolder } from "../lib/colors.ts";
 import { formatDate, readingTime, timeAgo } from "../lib/format.ts";
@@ -17,6 +18,22 @@ import { noteHref, pathFromRoute } from "../lib/routes.ts";
 import { useToast } from "../lib/toast.tsx";
 
 const NoteEditor = lazy(() => import("../components/NoteEditor.tsx").then((m) => ({ default: m.NoteEditor })));
+
+// Room for the rail (272px), the gap and padding, and a note column of about 530px. Measured on the page itself, not the
+// window, because the sidebar and the Ask panel take their width from it.
+const RAIL_MIN_PAGE_WIDTH = 920;
+
+function useFits(el: HTMLElement | null, minWidth: number): boolean {
+  const [fits, setFits] = useState(false);
+  useLayoutEffect(() => {
+    if (!el) return;
+    setFits(el.clientWidth >= minWidth);
+    const observer = new ResizeObserver(([entry]) => setFits(entry!.contentRect.width >= minWidth));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [el, minWidth]);
+  return fits;
+}
 
 /** Drops the first H1 when it repeats the page title shown above it. */
 function withoutTitleHeading(note: NoteDetail): string {
@@ -71,9 +88,9 @@ function NoteMeta({ note }: { note: NoteDetail }) {
       {note.tags.length > 0 && (
         <span className="flex flex-wrap gap-1">
           {note.tags.map((t) => (
-            <Chip key={t} className="!text-[11.5px]">
-              #{t}
-            </Chip>
+            <Link key={t} href={`/tags/${encodeURIComponent(t)}`} className="max-w-full" title={`Notes tagged #${t}`}>
+              <Chip className="!text-[11.5px] transition hover:border-accent/50 hover:text-accent-ink">#{t}</Chip>
+            </Link>
           ))}
         </span>
       )}
@@ -124,6 +141,7 @@ export function NotePage({ routePath, onAsk }: { routePath: string | undefined; 
   const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
   const resolveNote = useClientLinkResolver(notes, path ?? "");
   const readOnly = info?.readOnly ?? false;
+  const showRail = useFits(scrollRoot, RAIL_MIN_PAGE_WIDTH);
 
   useEffect(() => {
     if (path) rememberVisit(path);
@@ -175,7 +193,7 @@ export function NotePage({ routePath, onAsk }: { routePath: string | undefined; 
 
   return (
     <div ref={setScrollRoot} className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-[calc(var(--bv-note-width)+380px)] gap-12 px-8 pb-28 pt-14">
+      <div className={clsx("mx-auto flex gap-12 px-8 pb-28 pt-14", showRail ? "max-w-[calc(var(--bv-note-width)+380px)]" : "max-w-[calc(var(--bv-note-width)+64px)]")}>
         <article className="animate-in min-w-0 max-w-[var(--bv-note-width)] flex-1">
           <Breadcrumbs path={note.path} />
           <div className="flex items-start justify-between gap-4">
@@ -187,6 +205,7 @@ export function NotePage({ routePath, onAsk }: { routePath: string | undefined; 
               <Button size="sm" variant="ghost" onClick={() => onAsk(`Summarize "${note.title}" and what it connects to.`)}>
                 <Sparkles size={13} className="text-accent" /> Ask
               </Button>
+              <NoteActions path={note.path} />
               <Button size="sm" variant="outline" onClick={() => navigate(`${noteHref(note.path)}?edit=1`)} title="Edit (E)">
                 <PencilLine size={13} /> Edit
               </Button>
@@ -196,7 +215,7 @@ export function NotePage({ routePath, onAsk }: { routePath: string | undefined; 
           <PropertiesCard frontmatter={note.frontmatter} error={note.frontmatterError} path={note.path} />
           <Markdown source={source} path={note.path} kind={note.kind} outgoing={note.outgoing} resolveNote={resolveNote} />
         </article>
-        <RightRail note={note} scrollRoot={scrollRoot} readOnly={readOnly} />
+        {showRail && <RightRail note={note} scrollRoot={scrollRoot} readOnly={readOnly} />}
       </div>
     </div>
   );

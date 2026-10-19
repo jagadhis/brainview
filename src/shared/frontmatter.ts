@@ -62,6 +62,15 @@ export function formatFrontmatterValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function isCollection(value: unknown): value is object {
+  return typeof value === "object" && value !== null && !(value instanceof Date) && Object.keys(value).length > 0;
+}
+
+/** `key:` followed by the value as indented block YAML, one string per line. */
+function blockEntry(key: string, value: object): string[] {
+  return YAML.stringify({ [key]: value }, { lineWidth: 0 }).replace(/\n$/, "").split("\n");
+}
+
 const TOP_LEVEL_KEY = /^([^\s#:][^:]*?)\s*:(?:\s|$)/;
 
 /** A key that `setFrontmatterField` can write as one plain YAML line without changing the document's structure. */
@@ -105,7 +114,10 @@ export function setFrontmatterField(source: string, key: string, value: unknown)
       else break;
     }
     while (end > start + 1 && lines[end - 1]!.replace(/\r$/, "").trim() === "") end--;
-    const replacement = value === undefined ? [] : [entry + lineEnd(lines[start]!)];
+    // A value written as an indented block stays a block, so editing it changes no more lines than the value needs.
+    const wasBlock = end > start + 1 && lines[start]!.replace(/\r$/, "").trimEnd().endsWith(":");
+    const cr = lineEnd(lines[start]!);
+    const replacement = value === undefined ? [] : wasBlock && isCollection(value) ? blockEntry(key, value).map((l) => l + cr) : [entry + cr];
     lines.splice(start, end - start, ...replacement);
   }
 

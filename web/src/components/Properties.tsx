@@ -1,12 +1,12 @@
 import { Check, ChevronDown, CircleAlert, ExternalLink, Minus, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Link } from "wouter";
 import { isPropertyKey, parseFrontmatter, setFrontmatterField } from "../../../src/shared/frontmatter.ts";
 import { dirname, joinPath, normalizePath } from "../../../src/shared/paths.ts";
-import type { Frontmatter } from "../../../src/shared/types.ts";
-import { isHeaderStatus, STATUS_KEYS } from "../lib/colors.ts";
+import type { BrainConfig, FieldSchema, Frontmatter } from "../../../src/shared/types.ts";
+import { isHeaderStatus, STATUS_KEYS, toneFor } from "../lib/colors.ts";
 import { asDate, formatDate, timeAgo } from "../lib/format.ts";
-import { useNoteMap } from "../lib/queries.ts";
+import { useInfo, useNoteMap } from "../lib/queries.ts";
 import { noteHref } from "../lib/routes.ts";
 import { Chip, clsx, StatusBadge } from "./ui.tsx";
 
@@ -122,10 +122,111 @@ export function PropertyValue({ name, value, fromPath, depth = 0 }: { name: stri
   );
 }
 
+// The first six repeat StatusBadge's tones so configured colours look like the inferred ones.
+const PRESET_TONES: Record<string, string> = {
+  green: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 ring-emerald-500/25",
+  amber: "bg-amber-500/14 text-amber-800 dark:text-amber-300 ring-amber-500/30",
+  red: "bg-red-500/12 text-red-700 dark:text-red-300 ring-red-500/25",
+  blue: "bg-sky-500/12 text-sky-700 dark:text-sky-300 ring-sky-500/25",
+  violet: "bg-violet-500/12 text-violet-700 dark:text-violet-300 ring-violet-500/25",
+  gray: "bg-ink/[0.06] text-ink-soft ring-ink/10",
+  teal: "bg-teal-500/12 text-teal-700 dark:text-teal-300 ring-teal-500/25",
+  pink: "bg-pink-500/12 text-pink-700 dark:text-pink-300 ring-pink-500/25",
+};
+
+/**
+ * Badge colours for a value of an enum field in `.brainview.json`, or null when the key is not an enum there.
+ * A value without a configured colour gets the tone its wording suggests, as status badges do.
+ */
+export function enumBadgeStyle(config: BrainConfig | undefined, key: string, value: string): { className: string; style?: CSSProperties } | null {
+  // Own keys only: a key or value such as `constructor` must not reach Object.prototype.
+  const schema = config && Object.hasOwn(config.fields, key) ? config.fields[key] : undefined;
+  if (schema?.kind !== "enum") return null;
+  const color = schema.colors && Object.hasOwn(schema.colors, value) ? schema.colors[value]!.trim() : undefined;
+  if (color && PRESET_TONES[color.toLowerCase()]) return { className: PRESET_TONES[color.toLowerCase()]! };
+  if (color && CSS.supports("color", color)) {
+    return {
+      className: "",
+      style: { color, backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`, "--tw-ring-color": `color-mix(in srgb, ${color} 30%, transparent)` } as CSSProperties,
+    };
+  }
+  return { className: PRESET_TONES[toneFor(value)]! };
+}
+
+export function EnumBadge({ config, name, value, className }: { config: BrainConfig | undefined; name: string; value: string; className?: string }) {
+  const look = enumBadgeStyle(config, name, value) ?? { className: PRESET_TONES[toneFor(value)]! };
+  return (
+    <span style={look.style} className={clsx("inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11.5px] font-medium ring-1 ring-inset", look.className, className)}>
+      <span className="size-1.5 rounded-full bg-current" />
+      {value}
+    </span>
+  );
+}
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+function DateValue({ date, raw }: { date: Date; raw: string }) {
+  // A bare YYYY-MM-DD parses as UTC midnight, which is the previous day west of Greenwich.
+  const text = date.toLocaleDateString(undefined, { dateStyle: "medium", ...(DATE_ONLY.test(raw) && { timeZone: "UTC" }) });
+  return (
+    <span title={raw}>
+      {text} <span className="text-ink-faint">· {timeAgo(date.getTime())}</span>
+    </span>
+  );
+}
+
+const STEP_LOOK = {
+  done: { dot: "border-emerald-500 bg-emerald-500 text-white", label: "text-ink-soft" },
+  active: { dot: "border-accent bg-accent-soft ring-2 ring-accent/20", label: "font-medium text-accent-ink" },
+  pending: { dot: "border-line-strong bg-surface", label: "text-ink-faint" },
+} as const;
+
+function Steps({ order, value }: { order: string[]; value: Record<string, unknown> }) {
+  const steps = [...order, ...Object.keys(value).filter((k) => !order.includes(k))];
+  return (
+    <ol className="flex flex-wrap items-center gap-y-1.5">
+      {steps.map((step, i) => {
+        const status = value[step] == null ? "pending" : String(value[step]);
+        const look = Object.hasOwn(STEP_LOOK, status) ? STEP_LOOK[status as keyof typeof STEP_LOOK] : null;
+        return (
+          <li key={step} className="flex items-center text-[12px]" title={`${step}: ${status}`}>
+            {i > 0 && <span className="mx-1.5 h-px w-3 bg-line-strong" />}
+            <span className={clsx("mr-1 flex size-3.5 items-center justify-center rounded-full border", look?.dot ?? "border-dashed border-ink-faint")}>
+              {status === "done" && <Check size={9} strokeWidth={3} />}
+            </span>
+            <span className={look?.label ?? "text-ink-soft"}>{step}</span>
+            {!look && <span className="ml-1 text-[11px] text-ink-faint">({status})</span>}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Date);
+
+function FieldValue({ name, value, schema, config, fromPath }: { name: string; value: unknown; schema: FieldSchema | undefined; config: BrainConfig | undefined; fromPath: string }) {
+  if (schema?.kind === "enum" && isScalar(value) && value !== "") return <EnumBadge config={config} name={name} value={String(value)} />;
+  if (schema?.kind === "enum" && Array.isArray(value) && value.length > 0 && value.every(isScalar)) {
+    return (
+      <span className="flex flex-wrap gap-1">
+        {value.map((v, i) => (
+          <EnumBadge key={i} config={config} name={name} value={String(v)} />
+        ))}
+      </span>
+    );
+  }
+  if (schema?.kind === "steps" && isRecord(value)) return <Steps order={schema.values ?? []} value={value} />;
+  const date = schema?.kind === "date" ? asDate(value) : null;
+  if (date) return <DateValue date={date} raw={value instanceof Date ? value.toISOString() : String(value)} />;
+  return <PropertyValue name={name} value={value} fromPath={fromPath} />;
+}
+
 const COLLAPSED_ROWS = 5;
 
 export function PropertiesCard({ frontmatter, error, path }: { frontmatter: Frontmatter | null; error: string | null; path: string }) {
   const [open, setOpen] = useState(false);
+  const config = useInfo().data?.config;
   if (error) {
     return (
       <div className="mb-8 flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-[13px] text-red-700 dark:text-red-300">
@@ -146,10 +247,10 @@ export function PropertiesCard({ frontmatter, error, path }: { frontmatter: Fron
         {shown.map(([key, value]) => (
           <div key={key} className="grid grid-cols-[150px_minmax(0,1fr)] gap-3 px-4 py-2 text-[13px]">
             <dt className="truncate pt-px text-ink-faint" title={key}>
-              {key}
+              {config?.fields[key]?.label ?? key}
             </dt>
             <dd className="min-w-0 text-ink">
-              <PropertyValue name={key} value={value} fromPath={path} />
+              <FieldValue name={key} value={value} schema={config?.fields[key]} config={config} fromPath={path} />
             </dd>
           </div>
         ))}
@@ -240,7 +341,25 @@ function ListField({ name, value, onChange }: { name: string; value: Scalar[]; o
   );
 }
 
-function FieldInput({ name, value, onChange }: { name: string; value: unknown; onChange: (v: unknown) => void }) {
+function FieldInput({ name, value, schema, onChange }: { name: string; value: unknown; schema: FieldSchema | undefined; onChange: (v: unknown) => void }) {
+  if (schema?.kind === "enum" && schema.values?.length && (typeof value === "string" || value == null)) {
+    const current = value ?? "";
+    return (
+      <select
+        aria-label={name}
+        value={current}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-7 w-full rounded-md border border-line bg-canvas px-1.5 text-[13px] text-ink outline-none focus:ring-1 focus:ring-accent/40"
+      >
+        {!schema.values.includes(current) && <option value={current}>{current ? `${current} (not in the schema)` : "—"}</option>}
+        {schema.values.map((v) => (
+          <option key={v} value={v}>
+            {v}
+          </option>
+        ))}
+      </select>
+    );
+  }
   if (typeof value === "boolean") {
     return (
       <button
@@ -282,6 +401,7 @@ function FieldInput({ name, value, onChange }: { name: string; value: unknown; o
 
 export function PropertiesForm({ source, onChange }: { source: string; onChange: (next: string) => void }) {
   const { data, error } = useMemo(() => parseFrontmatter(source), [source]);
+  const config = useInfo().data?.config;
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
 
@@ -310,9 +430,9 @@ export function PropertiesForm({ source, onChange }: { source: string; onChange:
       {entries.map(([key, value]) => (
         <div key={key} className="group grid grid-cols-[120px_minmax(0,1fr)_24px] items-start gap-2">
           <label className="truncate pt-1.5 text-[12px] text-ink-faint" title={key}>
-            {key}
+            {config?.fields[key]?.label ?? key}
           </label>
-          <FieldInput name={key} value={value} onChange={(v) => set(key, v)} />
+          <FieldInput name={key} value={value} schema={config?.fields[key]} onChange={(v) => set(key, v)} />
           <button type="button" onClick={() => set(key, undefined)} title={`Remove ${key}`} className="mt-1 rounded p-1 text-ink-faint opacity-0 hover:bg-sunken hover:text-red-500 group-hover:opacity-100">
             <Trash2 size={13} />
           </button>

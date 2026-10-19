@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { CornerDownLeft, FileText, HeartPulse, LayoutDashboard, Moon, Network, Search, Settings, Sparkles, Table2, type LucideIcon } from "lucide-react";
+import { CalendarDays, CornerDownLeft, FilePlus2, FileText, FolderInput, HeartPulse, LayoutDashboard, Moon, Network, Search, Settings, Sparkles, Table2, Trash2, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { api } from "../lib/api.ts";
@@ -7,6 +7,7 @@ import { useNoteMap } from "../lib/queries.ts";
 import { recentPaths } from "../lib/recent.ts";
 import { noteHref } from "../lib/routes.ts";
 import { useUi } from "../lib/ui-state.tsx";
+import { useCanWrite, useCurrentNotePath, useOpenToday } from "./NoteActions.tsx";
 import { clsx, FolderDot } from "./ui.tsx";
 import { topFolder } from "../lib/colors.ts";
 
@@ -30,13 +31,16 @@ function useDebounced<T>(value: T, ms: number): T {
 }
 
 export function CommandPalette({ onAsk }: { onAsk: (question: string) => void }) {
-  const { paletteOpen, setPaletteOpen, setSettingsOpen, toggleDark } = useUi();
+  const { paletteOpen, setPaletteOpen, setSettingsOpen, toggleDark, setNoteDialog } = useUi();
   const [, navigate] = useLocation();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const notes = useNoteMap();
+  const canWrite = useCanWrite();
+  const openNote = useCurrentNotePath();
+  const openToday = useOpenToday();
   const q = useDebounced(query.trim(), 110);
 
   const { data: hits, isFetching } = useQuery({ queryKey: ["search", q], queryFn: () => api.search(q, 30), enabled: q.length > 0, placeholderData: (prev) => prev });
@@ -64,6 +68,18 @@ export function CommandPalette({ onAsk }: { onAsk: (question: string) => void })
       { id: "c:theme", icon: Moon, title: "Toggle dark mode", run: () => (toggleDark(), close()) },
       { id: "c:settings", icon: Settings, title: "Open settings", run: () => (close(), setSettingsOpen(true)) },
     ];
+    if (canWrite) {
+      commands.unshift(
+        { id: "c:new", icon: FilePlus2, title: "New note", run: () => (close(), setNoteDialog({ kind: "new" })) },
+        { id: "c:today", icon: CalendarDays, title: "Open today's note", run: () => (close(), void openToday()) },
+      );
+      if (openNote && notes.has(openNote)) {
+        commands.push(
+          { id: "c:move", icon: FolderInput, title: "Rename or move note", detail: openNote, run: () => (close(), setNoteDialog({ kind: "move", path: openNote })) },
+          { id: "c:delete", icon: Trash2, title: "Delete note", detail: openNote, run: () => (close(), setNoteDialog({ kind: "delete", path: openNote })) },
+        );
+      }
+    }
     const lower = query.trim().toLowerCase();
     if (!lower) {
       const recent = recentPaths()
@@ -85,7 +101,7 @@ export function CommandPalette({ onAsk }: { onAsk: (question: string) => void })
     const ask: Item = { id: "c:ask", icon: Sparkles, title: `Ask your brain: “${query.trim()}”`, run: () => (onAsk(query.trim()), close()) };
     return [...results, ask, ...commands.filter((c) => c.title.toLowerCase().includes(lower))];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hits, query, notes]);
+  }, [hits, query, notes, canWrite, openNote]);
 
   useEffect(() => setActive(0), [q]);
   useEffect(() => {

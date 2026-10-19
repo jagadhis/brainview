@@ -8,6 +8,8 @@ import { api, isConflict } from "../lib/api.ts";
 import { useInfo, useNoteMap } from "../lib/queries.ts";
 import { noteHref } from "../lib/routes.ts";
 import { useToast } from "../lib/toast.tsx";
+import { HistoryPanel } from "./HistoryPanel.tsx";
+import { RelatedNotes } from "./RelatedNotes.tsx";
 import { Button, clsx, SectionTitle, Spinner } from "./ui.tsx";
 
 function useActiveHeading(headings: Heading[], scrollRoot: HTMLElement | null): string | null {
@@ -198,7 +200,15 @@ function SuggestionsPanel({ note, readOnly }: { note: NoteDetail; readOnly: bool
   const tags = state.data?.tags ?? [];
   return (
     <section>
-      <SectionTitle action={state.data && <button type="button" onClick={run} className="text-[11px] text-accent-ink hover:underline">Refresh</button>}>
+      <SectionTitle
+        action={
+          state.data && (
+            <button type="button" onClick={run} title="Returns the same results until the note changes" className="text-[11px] text-accent-ink hover:underline">
+              Refresh
+            </button>
+          )
+        }
+      >
         <Sparkles size={12} className="mr-1 inline -translate-y-px text-accent" />
         AI suggestions
       </SectionTitle>
@@ -300,6 +310,10 @@ function SuggestionsPanel({ note, readOnly }: { note: NoteDetail; readOnly: bool
               </div>
             </div>
           )}
+          <p className="border-t border-accent/15 pt-2 text-[11px] leading-snug text-ink-faint">
+            {state.data.usage && `${state.data.usage.inputTokens.toLocaleString()} input · ${state.data.usage.outputTokens.toLocaleString()} output tokens. `}
+            Kept for this version of the note: asking again gives the same results until the note changes.
+          </p>
         </div>
       )}
     </section>
@@ -307,13 +321,16 @@ function SuggestionsPanel({ note, readOnly }: { note: NoteDetail; readOnly: bool
 }
 
 export function RightRail({ note, scrollRoot, readOnly }: { note: NoteDetail; scrollRoot: HTMLElement | null; readOnly: boolean }) {
+  const { data: info } = useInfo();
   return (
     <aside className="hidden w-[272px] shrink-0 xl:block">
       <div className="sticky top-14 max-h-[calc(100vh-4.5rem)] space-y-7 overflow-y-auto pb-10 pr-1">
         <Outline headings={note.headings} scrollRoot={scrollRoot} />
         <Backlinks note={note} />
         <Outgoing links={note.outgoing} />
-        <SuggestionsPanel note={note} readOnly={readOnly} />
+        <RelatedNotes path={note.path} />
+        {info?.git && !info.static && <HistoryPanel note={note} />}
+        <SuggestionsPanel note={note} readOnly={readOnly || Boolean(info?.static)} />
         <Link href={`/graph?focus=${encodeURIComponent(note.path)}&depth=2`} className="flex items-center gap-1.5 text-[12px] text-ink-soft hover:text-accent-ink">
           <Network size={13} /> Open local graph
         </Link>

@@ -7,6 +7,7 @@ export interface TreeFolder {
   folders: TreeFolder[];
   notes: NoteListing[];
   artifacts: ArtifactSummary[];
+  /** Notes in this folder and below; artifacts are listed but not counted. */
   count: number;
 }
 
@@ -33,10 +34,7 @@ export function buildTree(notes: NoteListing[], artifacts: ArtifactSummary[] = [
     folderFor(note.folder).notes.push(note);
     countIn(note.folder);
   }
-  for (const artifact of artifacts) {
-    folderFor(dirname(artifact.path)).artifacts.push(artifact);
-    countIn(dirname(artifact.path));
-  }
+  for (const artifact of artifacts) folderFor(dirname(artifact.path)).artifacts.push(artifact);
   const sort = (folder: TreeFolder) => {
     folder.folders.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     folder.notes.sort((a, b) => indexFirst(a) - indexFirst(b) || a.path.localeCompare(b.path, undefined, { numeric: true }));
@@ -49,4 +47,25 @@ export function buildTree(notes: NoteListing[], artifacts: ArtifactSummary[] = [
 
 function indexFirst(note: NoteListing): number {
   return /\/(readme|index|current)\.mdx?$|^(readme|index)\.mdx?$/i.test(note.path) ? 0 : 1;
+}
+
+export type TreeRow =
+  | { kind: "folder"; path: string; parent: string; depth: number; folder: TreeFolder; open: boolean }
+  | { kind: "note"; path: string; parent: string; depth: number; note: NoteListing }
+  | { kind: "artifact"; path: string; parent: string; depth: number; artifact: ArtifactSummary };
+
+/** The visible rows of the tree, in display order, descending only into expanded folders. */
+export function flattenTree(root: TreeFolder, expanded: Set<string>): TreeRow[] {
+  const rows: TreeRow[] = [];
+  const walk = (folder: TreeFolder, depth: number) => {
+    for (const child of folder.folders) {
+      const open = expanded.has(child.path);
+      rows.push({ kind: "folder", path: child.path, parent: folder.path, depth, folder: child, open });
+      if (open) walk(child, depth + 1);
+    }
+    for (const note of folder.notes) rows.push({ kind: "note", path: note.path, parent: folder.path, depth, note });
+    for (const artifact of folder.artifacts) rows.push({ kind: "artifact", path: artifact.path, parent: folder.path, depth, artifact });
+  };
+  walk(root, 0);
+  return rows;
 }

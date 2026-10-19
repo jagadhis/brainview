@@ -23,10 +23,14 @@ describe("setFrontmatterField", () => {
     expect(next).toBe(brief.replace(`stages: {"intake":"done","understand":"active"}`, `stages: {"intake":"done","understand":"done","plan":"active"}`));
   });
 
-  test("replaces a multi-line block value with one line", () => {
+  test("keeps a block value in block style", () => {
     const next = setFrontmatterField(brief, "tags", ["alpha", "gamma"]);
-    expect(next).toContain(`tags: ["alpha","gamma"]\nopen_blockers: 0\n`);
-    expect(next).not.toContain("  - beta");
+    expect(next).toBe(brief.replace("  - beta", "  - gamma"));
+  });
+
+  test("writes a block value that becomes a plain scalar on one line", () => {
+    const next = setFrontmatterField(brief, "tags", "solo");
+    expect(next).toContain("\ntags: solo\nopen_blockers: 0\n");
     expect(next.split("\n---\n")[1]).toBe(brief.split("\n---\n")[1]);
   });
 
